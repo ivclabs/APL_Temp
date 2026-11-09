@@ -55,9 +55,12 @@ minutes and comes back down within 30-60 minutes after the door is closed.
 - Cooling failure or power cut: the temperature climbs steadily for hours and the normal cycles \
 stop. A closed, full freezer keeps food frozen for about a day, so act early.
 - Thermostat set wrong: the temperature is stable but settles at the wrong level.
-- The probe is a small metal tip that reacts within seconds. Readings around room temperature \
-(18-25 °C) usually mean the probe is outside the freezer, for example during testing. A jump of \
-several degrees within seconds usually means someone is touching or moving the probe.
+- The probe is a small metal tip that reacts within seconds. A jump of several degrees within \
+seconds usually means someone is touching or moving the probe.
+- Readings that stay around room temperature (18-25 °C) mean the probe is outside the freezer, \
+for example on a desk during testing - not that the freezer is that warm. A failing freezer warms \
+slowly over many hours and does not start at room temperature. In that case say the probe seems \
+to be outside the freezer and that it should be put back inside; do not warn about thawed food.
 - Sensor fault: impossible jumps (tens of degrees back and forth) or exactly 85.0 °C or -127 °C.
 - Tampering or a cyber attack on a smart (network-connected) cooling controller is a rare but \
 possible cause. Mention it only when the pattern fits and ordinary causes explain it badly: for \
