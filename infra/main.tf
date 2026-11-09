@@ -74,17 +74,34 @@ resource "aws_iam_role_policy" "read_api_key" {
   })
 }
 
+data "aws_caller_identity" "me" {}
+
 # Use Claude on Bedrock (step 5). Only inference - it can't change any Bedrock settings.
 resource "aws_iam_role_policy" "bedrock" {
   name = "use-claude-on-bedrock"
   role = aws_iam_role.server.id
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = "bedrock-mantle:CreateInference"
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        # Claude Haiku 4.5 through the EU inference profile (InvokeModel endpoint).
+        # The profile forwards to the model in several EU regions, so both ARNs are needed.
+        Sid    = "ClaudeHaikuEU"
+        Effect = "Allow"
+        Action = "bedrock:InvokeModel"
+        Resource = [
+          "arn:aws:bedrock:${var.region}:${data.aws_caller_identity.me.account_id}:inference-profile/eu.anthropic.claude-haiku-4-5-*",
+          "arn:aws:bedrock:eu-*::foundation-model/anthropic.claude-haiku-4-5-*",
+        ]
+      },
+      {
+        # Newer endpoint for Claude 4.7+ models (e.g. Haiku 5.5) once the account gets access.
+        Sid      = "ClaudeMantle"
+        Effect   = "Allow"
+        Action   = "bedrock-mantle:CreateInference"
+        Resource = "*"
+      },
+    ]
   })
 }
 

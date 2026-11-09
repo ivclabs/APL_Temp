@@ -88,3 +88,13 @@ def test_two_workers_starting_together_dont_crash(server):
         server.init_db()                      # must not raise "duplicate column name"
     finally:
         server.sqlite3.connect = real_connect
+
+
+def test_effort_only_sent_to_models_that_support_it(server, fake_ai, monkeypatch):
+    client = server.app.test_client()
+    client.post("/api/ask", json={"question": "Hi"})
+    assert fake_ai.requests[-1]["output_config"] == {"effort": "low"}     # claude-haiku-5-5 in the fixture
+
+    monkeypatch.setattr(ai, "MODEL", "eu.anthropic.claude-haiku-4-5-20251001-v1:0")
+    client.post("/api/ask", json={"question": "Hi"})
+    assert "output_config" not in fake_ai.requests[-1]                  # Haiku 4.5 rejects it

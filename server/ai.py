@@ -1,9 +1,15 @@
-"""AI layer: Claude Haiku 5.5 explains alarms, writes daily summaries and answers questions.
+"""AI layer: Claude explains alarms, writes daily summaries and answers questions.
 
 Backends (AI_BACKEND in the environment):
-  bedrock   - Claude on AWS Bedrock, signed with the server's IAM role, no API key  [default]
+  bedrock   - Claude Haiku 4.5 on AWS Bedrock through the EU inference profile, signed with the
+              server's IAM role (no API key)  [default]
   anthropic - Claude API with ANTHROPIC_API_KEY (handy for local testing)
   off       - no AI calls
+
+Why Haiku 4.5 and SDK 1.x: this AWS account can't use Haiku 5.5 on Bedrock yet. Haiku 4.5 runs on
+Bedrock's InvokeModel endpoint, which needs the anthropic SDK below 2.0 (2.x sends an API version
+Bedrock only accepts for Claude 4.7+). To move to a newer model later: AnthropicBedrockMantle,
+anthropic 2.x, and model "anthropic.claude-haiku-5-5".
 
 Every public function returns None when AI is off, over the daily limit, or fails,
 so the rest of the app keeps working without AI.
@@ -20,7 +26,10 @@ log = logging.getLogger("apl_temp.ai")
 
 BACKEND = os.environ.get("AI_BACKEND", "bedrock")
 REGION = os.environ.get("AWS_REGION", "eu-north-1")
-DEFAULT_MODEL = {"bedrock": "anthropic.claude-haiku-5-5", "anthropic": "claude-haiku-5-5"}
+DEFAULT_MODEL = {
+    "bedrock": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",  # EU profile: data stays in EU regions
+    "anthropic": "claude-haiku-4-5",
+}
 MODEL = os.environ.get("AI_MODEL") or DEFAULT_MODEL.get(BACKEND, "")
 DAILY_LIMIT = int(os.environ.get("AI_DAILY_LIMIT", 50))  # cost guard: max AI calls per day
 LOCAL_TZ = ZoneInfo(os.environ.get("LOCAL_TZ", "Europe/Stockholm"))
@@ -28,6 +37,12 @@ LOCAL_TZ = ZoneInfo(os.environ.get("LOCAL_TZ", "Europe/Stockholm"))
 SYSTEM_PROMPT = """You are the assistant inside APL_Temp, a small temperature monitor: a DS18B20 \
 waterproof probe on an ESP32 microcontroller sends readings to a web server. The people reading \
 your text are the owner and visitors to the web dashboard; they are not experts.
+
+About the sensor: the probe is a small waterproof metal tip that reacts within seconds. Holding \
+it in a hand (about 32-34 °C), dipping it in warm or cold water, sunlight, a heater or an open \
+window can change the reading by several degrees in a minute, so fast changes usually have a real, \
+local cause. Only suggest a sensor fault if the data looks impossible (for example jumps of tens \
+of degrees back and forth, or exactly 85.0 °C or -127 °C).
 
 Write plain English in short sentences. Use the exact numbers and times from the data. Never \
 invent readings or events that are not in the data. Times are local time (Europe/Stockholm). \
@@ -40,12 +55,17 @@ def enabled():
     return BACKEND in DEFAULT_MODEL
 
 
+def _supports_effort():
+    # Haiku 4.5 rejects the effort setting; newer models accept it.
+    return "haiku-4-5" not in MODEL
+
+
 def _get_client():
     """Create the client once. A short timeout so a slow answer never blocks the app for long."""
     global _client
     if _client is None:
         if BACKEND == "bedrock":
-            _client = anthropic.AnthropicBedrockMantle(aws_region=REGION, timeout=30.0, max_retries=2)
+            _client = anthropic.AnthropicBedrock(aws_region=REGION, timeout=30.0, max_retries=2)
         else:
             _client = anthropic.Anthropic(timeout=30.0, max_retries=2)
     return _client
@@ -108,13 +128,16 @@ def _ask(db_path, instructions, data):
         log.warning("AI daily limit (%d) reached - skipping AI call", DAILY_LIMIT)
         return None
 
+    extra = {}
+    if _supports_effort():
+        extra["output_config"] = {"effort": "low"}  # simple writing task - low effort is enough and cheapest
     try:
         response = _get_client().messages.create(
             model=MODEL,
             max_tokens=2000,                       # answers are short; this leaves room for thinking
-            output_config={"effort": "low"},       # simple writing task - low effort is enough and cheapest
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": f"{instructions}\n\n<data>\n{data}\n</data>"}],
+            **extra,
         )
     except anthropic.RateLimitError:
         log.warning("AI rate limited - skipping")

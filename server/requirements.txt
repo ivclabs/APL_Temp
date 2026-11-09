@@ -2,4 +2,5 @@ flask==3.1.*
 python-dotenv==1.*
 pytest==8.*
 gunicorn==23.*
-anthropic[bedrock]==2.*
+# Claude SDK 1.x: Bedrock InvokeModel with Haiku 4.5 (2.x needs Claude 4.7+ on Bedrock, see ai.py)
+anthropic[bedrock]>=1.17,<2
