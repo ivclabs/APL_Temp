@@ -8,7 +8,7 @@ sends alerts, and uses Generative AI (AWS Bedrock) to explain alerts, summarize
 data, and answer questions about it.
 
 ```
-ESP32 + DS18B20 ──HTTP──> nginx ──> Flask app (gunicorn) ──> SQLite      <──> GenAI (Bedrock)
+ESP32 + DS18B20 ──HTTP──> nginx ──> Flask app (gunicorn) ──> SQLite      <──> Claude Haiku 4.5 (Bedrock, EU)
                           └──────── EC2, Elastic IP ───────┘                  │
                                                                               └──> Email alerts (SNS)
 ```
@@ -19,9 +19,9 @@ ESP32 + DS18B20 ──HTTP──> nginx ──> Flask app (gunicorn) ──> SQL
 - [x] Alarm rules on the server: too high, too low, rising too fast (with 15 min cooldown)
 - [x] Live web page (updates every 2 s, countdown to next reading)
 - [x] Deployed to AWS with Terraform + Ansible
-- [ ] GenAI layer (Bedrock)
+- [x] GenAI with Claude Haiku 4.5 on AWS Bedrock: explains alarms, writes a daily summary, answers questions
 - [ ] Email alerts (SNS)
-- [ ] Dashboard chart + AI chat
+- [ ] Dashboard chart
 
 ## Hardware
 - Olimex ESP32-C3-DevKit-Lipo
@@ -52,6 +52,15 @@ terraform apply
 - Remove everything: `terraform destroy`
 
 Terraform state is kept in an encrypted, versioned S3 bucket.
+
+## AI (Claude on AWS Bedrock)
+- **Alarm explanations:** when an alarm fires, Claude gets the last 30 minutes of readings and writes
+  what happened and what to check. Runs in the background, so the ESP32 never waits.
+- **Daily summary:** "Today, by AI" on the page, rewritten at most every 3 hours.
+- **Ask the AI:** visitors ask questions; Claude answers only from the stored data.
+- **Cost guard:** max 50 AI calls per day (`AI_DAILY_LIMIT`); usage and tokens at `/api/ai`.
+- **No AI key on the server:** Bedrock calls are signed with the EC2 instance's IAM role.
+- If AI is off or fails, the app keeps working with the plain alarm messages.
 
 ## Tests
 ```
