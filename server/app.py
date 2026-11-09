@@ -85,7 +85,12 @@ def init_db():
         # Added in step 5: the AI's explanation of the alarm (filled in a few seconds later).
         columns = [r[1] for r in db.execute("PRAGMA table_info(alarms)")]
         if "ai_message" not in columns:
-            db.execute("ALTER TABLE alarms ADD COLUMN ai_message TEXT")
+            try:
+                db.execute("ALTER TABLE alarms ADD COLUMN ai_message TEXT")
+            except sqlite3.OperationalError as e:
+                # gunicorn starts 2 workers at once; the other one may have added it first.
+                if "duplicate column" not in str(e):
+                    raise
         db.execute(
             """CREATE TABLE IF NOT EXISTS summaries (
                    day       TEXT PRIMARY KEY,  -- local date
