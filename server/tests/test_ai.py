@@ -64,3 +64,27 @@ def test_summary_is_reused_not_rewritten(server, fake_ai):
     second = client.get("/api/summary").get_json()
     assert first["text"] == second["text"] == "Fake AI answer"
     assert len(fake_ai.requests) == 1                    # second request used the saved summary
+
+
+def test_two_workers_starting_together_dont_crash(server):
+    # Simulates the race: the column was added by the other worker between our check and our ALTER.
+    import sqlite3
+    with sqlite3.connect(server.DB_PATH) as db:
+        db.execute("DROP TABLE alarms")
+    server.init_db()                          # worker 1 adds the column
+    real_connect = sqlite3.connect
+
+    class StaleCheck:                         # worker 2 still thinks the column is missing
+        def __init__(self, conn): self.conn = conn
+        def __enter__(self): self.conn.__enter__(); return self
+        def __exit__(self, *a): return self.conn.__exit__(*a)
+        def execute(self, sql, *args):
+            if sql.startswith("PRAGMA table_info(alarms)"):
+                return iter([(0, "id"), (1, "device")])
+            return self.conn.execute(sql, *args)
+
+    server.sqlite3.connect = lambda path: StaleCheck(real_connect(path))
+    try:
+        server.init_db()                      # must not raise "duplicate column name"
+    finally:
+        server.sqlite3.connect = real_connect
