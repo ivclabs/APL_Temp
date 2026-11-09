@@ -1,0 +1,22 @@
+# Secrets - never commit (copy the .example file instead)
+secrets.h
+.env
+*.pem
+*.key
+
+# PlatformIO build output
+.pio/
+
+# Editor / OS
+.vscode/.browse.c_cpp.db*
+.vscode/ipch
+.DS_Store
+
+# Python (for the server later)
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Local notes for Claude Code (personal, not published)
+CLAUDE.md
