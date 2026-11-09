@@ -1,6 +1,6 @@
 # APL_Temp – AI-powered temperature monitor
 
-**Live: http://56.228.124.110**
+**Live: http://56.228.124.110** · **Full documentation: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)**
 
 Final project for the APL practice period. A DS18B20 temperature sensor on an
 ESP32-C3 sends readings to a web server on AWS. The server checks thresholds,
@@ -21,7 +21,8 @@ ESP32 + DS18B20 ──HTTP──> nginx ──> Flask app (gunicorn) ──> SQL
 - [x] Deployed to AWS with Terraform + Ansible
 - [x] GenAI with Claude Haiku 4.5 on AWS Bedrock: explains alarms, writes a daily summary, answers questions
 - [x] Email alerts with the AI explanation (AWS SNS)
-- [ ] Dashboard chart
+- [x] Dashboard chart (1 h / 6 h / 24 h, limit lines, alarm markers)
+- [x] Documentation: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) · video script: [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md)
 
 ## Hardware
 - Olimex ESP32-C3-DevKit-Lipo
