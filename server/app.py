@@ -22,7 +22,7 @@ load_dotenv(BASE_DIR / ".env")
 API_KEY = os.environ.get("API_KEY", "")
 DB_PATH = os.environ.get("DB_PATH", str(BASE_DIR / "readings.db"))
 ALARMS = AlarmConfig.from_env()
-READING_EVERY_S = int(os.environ.get("READING_EVERY_S", 30))  # must match the ESP32
+READING_EVERY_S = int(os.environ.get("READING_EVERY_S", 30))  # must match HEARTBEAT_MS on the ESP32
 
 # DS18B20 can measure -55 to +125 °C. Anything outside is a broken reading.
 MIN_VALID_C = -55
@@ -200,7 +200,7 @@ PAGE = """<!doctype html>
 <script>
 // Asks the server for new data every 3 seconds and updates the page without reloading it.
 const CHECK_EVERY_MS = 2000;                    // how often we ask the server
-const READING_EVERY_S = {{ reading_every_s }};  // how often the ESP32 sends
+const READING_EVERY_S = {{ reading_every_s }};  // ESP32 sends at least this often (sooner if temp changes)
 let newestSeen = null;
 let latestReadingAt = null;   // time of newest reading, in ms
 let serverOk = true;
@@ -260,7 +260,8 @@ function showAlarms(alarms) {
   }
 }
 
-// Status line: count down to the next expected reading from the ESP32.
+// Status line: count down to the latest time the next reading should arrive.
+// It can come sooner: the ESP32 sends right away when the temperature changes.
 function showLive() {
   const live = document.getElementById("live");
   const text = document.getElementById("live-text");
@@ -279,9 +280,9 @@ function showLive() {
   const secsSince = Math.round((Date.now() - latestReadingAt) / 1000);
 
   if (secsLeft > 0) {
-    text.textContent = "Live · next reading in " + secsLeft + " s";
+    text.textContent = "Live · next update within " + secsLeft + " s";
   } else if (secsSince < READING_EVERY_S * 3) {
-    text.textContent = "Live · next reading any moment…";
+    text.textContent = "Live · next update any moment…";
   } else {
     live.classList.add("late");   // missed 2+ readings
     text.textContent = "No new reading for " + secsSince + " s – is the ESP32 on?";

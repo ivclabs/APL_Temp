@@ -9,7 +9,14 @@
 
 #define SENSOR_PIN 7                 // GPIO7 -> A3 -> column 20
 #define DEVICE_NAME "esp32-c3"
-const unsigned long SEND_EVERY_MS = 30000;   // send one reading every 30 s
+// "Send on change": read often, but only send when something is worth sending.
+const unsigned long READ_EVERY_MS = 2000;    // read the sensor every 2 s
+const unsigned long HEARTBEAT_MS  = 30000;   // send at least every 30 s, even if nothing changed
+const float SEND_IF_CHANGED_C     = 0.3;     // send right away if temp moved this much (sensor noise is ~0.06)
+
+float lastSentTemp = 0;
+unsigned long lastSentAt = 0;
+bool sentOnce = false;
 
 OneWire oneWire(SENSOR_PIN);
 DallasTemperature sensors(&oneWire);
@@ -61,18 +68,18 @@ void setup() {
   connectWiFi();
 }
 
-// Fixed schedule: send at 0 s, 30 s, 60 s... no matter how long reading/sending takes.
-unsigned long nextSendAt = 0;
+// Fixed schedule: read at 0 s, 2 s, 4 s... no matter how long reading/sending takes.
+unsigned long nextReadAt = 0;
 
 void loop() {
   unsigned long now = millis();
-  if ((long)(now - nextSendAt) < 0) {
+  if ((long)(now - nextReadAt) < 0) {
     delay(20);        // not time yet - check again soon
     return;
   }
-  nextSendAt += SEND_EVERY_MS;
-  if ((long)(now - nextSendAt) >= 0) {
-    nextSendAt = now + SEND_EVERY_MS;   // fell far behind (e.g. slow WiFi) - restart the schedule
+  nextReadAt += READ_EVERY_MS;
+  if ((long)(now - nextReadAt) >= 0) {
+    nextReadAt = now + READ_EVERY_MS;   // fell far behind (e.g. slow WiFi) - restart the schedule
   }
 
   sensors.requestTemperatures();
@@ -80,15 +87,30 @@ void loop() {
 
   if (t == DEVICE_DISCONNECTED_C) {
     Serial.println("Sensor not responding - check column 20");
-  } else if (t == 85.0) {
+    return;
+  }
+  if (t == 85.0) {
     // 85.0 is the DS18B20's power-on value, not a real reading.
     Serial.println("Got 85.0 (sensor start-up value) - skipping");
-  } else if (!connectWiFi()) {
+    return;
+  }
+
+  // Decide if this reading is worth sending.
+  bool changed = sentOnce && fabs(t - lastSentTemp) >= SEND_IF_CHANGED_C;
+  bool heartbeatDue = !sentOnce || now - lastSentAt >= HEARTBEAT_MS;
+  if (!changed && !heartbeatDue) return;   // nothing new - stay quiet
+
+  const char *why = changed ? "changed" : "heartbeat";
+
+  if (!connectWiFi()) {
     Serial.printf("Temperature: %.2f C (not sent, no WiFi)\n", t);
   } else {
     int code = sendReading(t);
     if (code == 201) {
-      Serial.printf("Temperature: %.2f C -> sent OK\n", t);
+      lastSentTemp = t;
+      lastSentAt = now;
+      sentOnce = true;
+      Serial.printf("Temperature: %.2f C -> sent OK (%s)\n", t, why);
     } else if (code == 401) {
       Serial.printf("Temperature: %.2f C -> server says wrong API key\n", t);
     } else if (code < 0) {
