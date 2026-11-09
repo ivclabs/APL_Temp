@@ -22,6 +22,7 @@ load_dotenv(BASE_DIR / ".env")
 API_KEY = os.environ.get("API_KEY", "")
 DB_PATH = os.environ.get("DB_PATH", str(BASE_DIR / "readings.db"))
 ALARMS = AlarmConfig.from_env()
+READING_EVERY_S = int(os.environ.get("READING_EVERY_S", 30))  # must match the ESP32
 
 # DS18B20 can measure -55 to +125 °C. Anything outside is a broken reading.
 MIN_VALID_C = -55
@@ -171,6 +172,7 @@ PAGE = """<!doctype html>
     .live { font-size: .9rem; }
     .dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: #1e8e3e; margin-right: .3rem; }
     .offline .dot { background: #d93025; }
+    .late .dot { background: #f29900; }
     .alarm { background: #fdecea; border-left: 4px solid #d93025; padding: .5rem .75rem; margin: .4rem 0; }
     .alarm small { color: #777; display: block; }
     tr.new td { animation: flash 2s ease-out; }
@@ -197,9 +199,11 @@ PAGE = """<!doctype html>
 
 <script>
 // Asks the server for new data every 3 seconds and updates the page without reloading it.
-const CHECK_EVERY_MS = 3000;
-let lastChecked = null;
+const CHECK_EVERY_MS = 2000;                    // how often we ask the server
+const READING_EVERY_S = {{ reading_every_s }};  // how often the ESP32 sends
 let newestSeen = null;
+let latestReadingAt = null;   // time of newest reading, in ms
+let serverOk = true;
 
 // Server stores UTC; show it in the viewer's own time zone (e.g. Swedish time).
 function localTime(iso) {
@@ -220,6 +224,7 @@ function showReadings(rows) {
   }
   document.getElementById("now").textContent = rows[0].temp_c.toFixed(2) + " °C";
   document.getElementById("latest").textContent = localTime(rows[0].created);
+  latestReadingAt = new Date(rows[0].created).getTime();
 
   const body = document.getElementById("rows");
   body.replaceChildren();
@@ -255,15 +260,32 @@ function showAlarms(alarms) {
   }
 }
 
-function showLive(ok) {
+// Status line: count down to the next expected reading from the ESP32.
+function showLive() {
   const live = document.getElementById("live");
-  live.classList.toggle("offline", !ok);
-  if (!ok) {
-    document.getElementById("live-text").textContent = "Can't reach the server – retrying…";
+  const text = document.getElementById("live-text");
+  live.classList.remove("offline", "late");
+
+  if (!serverOk) {
+    live.classList.add("offline");
+    text.textContent = "Can't reach the server – retrying…";
     return;
   }
-  const secs = Math.round((Date.now() - lastChecked) / 1000);
-  document.getElementById("live-text").textContent = "Live · checked " + secs + " s ago";
+  if (latestReadingAt === null) {
+    text.textContent = "Live · waiting for the first reading…";
+    return;
+  }
+  const secsLeft = Math.ceil((latestReadingAt + READING_EVERY_S * 1000 - Date.now()) / 1000);
+  const secsSince = Math.round((Date.now() - latestReadingAt) / 1000);
+
+  if (secsLeft > 0) {
+    text.textContent = "Live · next reading in " + secsLeft + " s";
+  } else if (secsSince < READING_EVERY_S * 3) {
+    text.textContent = "Live · next reading any moment…";
+  } else {
+    live.classList.add("late");   // missed 2+ readings
+    text.textContent = "No new reading for " + secsSince + " s – is the ESP32 on?";
+  }
 }
 
 async function update() {
@@ -274,16 +296,16 @@ async function update() {
     ]);
     showReadings(readings);
     showAlarms(alarms);
-    lastChecked = Date.now();
-    showLive(true);
+    serverOk = true;
   } catch (e) {
-    showLive(false);
+    serverOk = false;
   }
+  showLive();
 }
 
 update();
 setInterval(update, CHECK_EVERY_MS);
-setInterval(() => { if (lastChecked) showLive(!document.getElementById("live").classList.contains("offline")); }, 1000);
+setInterval(showLive, 1000);   // tick the countdown every second
 // Phones pause pages in the background - check right away when the page is shown again.
 document.addEventListener("visibilitychange", () => { if (!document.hidden) update(); });
 </script>
@@ -294,7 +316,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) upda
 @app.get("/")
 def index():
     # The page itself is just a shell; JavaScript fills in the data from the API.
-    return render_template_string(PAGE, cfg=ALARMS)
+    return render_template_string(PAGE, cfg=ALARMS, reading_every_s=READING_EVERY_S)
 
 
 init_db()
