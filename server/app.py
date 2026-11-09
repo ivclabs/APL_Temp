@@ -161,7 +161,6 @@ PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="10">
   <title>APL_Temp</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
@@ -169,52 +168,133 @@ PAGE = """<!doctype html>
     table { width: 100%; border-collapse: collapse; }
     td, th { text-align: left; padding: .3rem; border-bottom: 1px solid #ddd; }
     .muted { color: #777; }
+    .live { font-size: .9rem; }
+    .dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; background: #1e8e3e; margin-right: .3rem; }
+    .offline .dot { background: #d93025; }
     .alarm { background: #fdecea; border-left: 4px solid #d93025; padding: .5rem .75rem; margin: .4rem 0; }
     .alarm small { color: #777; display: block; }
+    tr.new td { animation: flash 2s ease-out; }
+    @keyframes flash { from { background: #fff3b0; } to { background: transparent; } }
   </style>
 </head>
 <body>
   <h1>APL_Temp</h1>
-  {% if rows %}
-    <div class="now">{{ "%.2f"|format(rows[0].temp_c) }} °C</div>
-    <p class="muted">Latest reading: {{ rows[0].created }} (UTC) · page updates every 10 s</p>
-  {% else %}
-    <p>No readings yet. Waiting for the ESP32…</p>
-  {% endif %}
+  <div id="now" class="now">–</div>
+  <p class="muted">Latest reading: <span id="latest">–</span></p>
+  <p id="live" class="live muted"><span class="dot"></span><span id="live-text">Connecting…</span></p>
 
   <p class="muted">Limits: low &lt; {{ cfg.low_c }} °C · high &gt; {{ cfg.high_c }} °C ·
      rising ≥ {{ cfg.rise_c_per_min }} °C/min</p>
 
   <h2>Alarms</h2>
-  {% for a in alarms %}
-    <div class="alarm"><b>{{ a.kind|upper }}</b> – {{ a.message }}<small>{{ a.created }} (UTC)</small></div>
-  {% else %}
-    <p class="muted">No alarms. All good.</p>
-  {% endfor %}
+  <div id="alarms"><p class="muted">Loading…</p></div>
 
-  {% if rows %}
   <h2>Latest readings</h2>
   <table>
-    <tr><th>Time (UTC)</th><th>Device</th><th>°C</th></tr>
-    {% for r in rows %}
-    <tr><td>{{ r.created }}</td><td>{{ r.device }}</td><td>{{ "%.2f"|format(r.temp_c) }}</td></tr>
-    {% endfor %}
+    <thead><tr><th>Time</th><th>Device</th><th>°C</th></tr></thead>
+    <tbody id="rows"></tbody>
   </table>
-  {% endif %}
+
+<script>
+// Asks the server for new data every 3 seconds and updates the page without reloading it.
+const CHECK_EVERY_MS = 3000;
+let lastChecked = null;
+let newestSeen = null;
+
+// Server stores UTC; show it in the viewer's own time zone (e.g. Swedish time).
+function localTime(iso) {
+  return new Date(iso).toLocaleString("sv-SE", { dateStyle: "short", timeStyle: "medium" });
+}
+
+function cell(text) {
+  const td = document.createElement("td");
+  td.textContent = text;
+  return td;
+}
+
+function showReadings(rows) {
+  if (rows.length === 0) {
+    document.getElementById("now").textContent = "–";
+    document.getElementById("latest").textContent = "no readings yet, waiting for the ESP32…";
+    return;
+  }
+  document.getElementById("now").textContent = rows[0].temp_c.toFixed(2) + " °C";
+  document.getElementById("latest").textContent = localTime(rows[0].created);
+
+  const body = document.getElementById("rows");
+  body.replaceChildren();
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    // Flash rows that arrived since the last check (not on first load).
+    if (newestSeen !== null && r.created > newestSeen) tr.className = "new";
+    tr.append(cell(localTime(r.created)), cell(r.device), cell(r.temp_c.toFixed(2)));
+    body.append(tr);
+  }
+  newestSeen = rows[0].created;
+}
+
+function showAlarms(alarms) {
+  const box = document.getElementById("alarms");
+  box.replaceChildren();
+  if (alarms.length === 0) {
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No alarms. All good.";
+    box.append(p);
+    return;
+  }
+  for (const a of alarms) {
+    const div = document.createElement("div");
+    div.className = "alarm";
+    const b = document.createElement("b");
+    b.textContent = a.kind.toUpperCase();
+    const small = document.createElement("small");
+    small.textContent = localTime(a.created);
+    div.append(b, " – " + a.message, small);
+    box.append(div);
+  }
+}
+
+function showLive(ok) {
+  const live = document.getElementById("live");
+  live.classList.toggle("offline", !ok);
+  if (!ok) {
+    document.getElementById("live-text").textContent = "Can't reach the server – retrying…";
+    return;
+  }
+  const secs = Math.round((Date.now() - lastChecked) / 1000);
+  document.getElementById("live-text").textContent = "Live · checked " + secs + " s ago";
+}
+
+async function update() {
+  try {
+    const [readings, alarms] = await Promise.all([
+      fetch("/api/readings?limit=30").then(r => r.json()),
+      fetch("/api/alarms?limit=10").then(r => r.json()),
+    ]);
+    showReadings(readings);
+    showAlarms(alarms);
+    lastChecked = Date.now();
+    showLive(true);
+  } catch (e) {
+    showLive(false);
+  }
+}
+
+update();
+setInterval(update, CHECK_EVERY_MS);
+setInterval(() => { if (lastChecked) showLive(!document.getElementById("live").classList.contains("offline")); }, 1000);
+// Phones pause pages in the background - check right away when the page is shown again.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) update(); });
+</script>
 </body>
 </html>"""
 
 
 @app.get("/")
 def index():
-    db = get_db()
-    rows = db.execute(
-        "SELECT device, temp_c, created FROM readings ORDER BY id DESC LIMIT 30"
-    ).fetchall()
-    alarms = db.execute(
-        "SELECT kind, message, created FROM alarms ORDER BY id DESC LIMIT 10"
-    ).fetchall()
-    return render_template_string(PAGE, rows=rows, alarms=alarms, cfg=ALARMS)
+    # The page itself is just a shell; JavaScript fills in the data from the API.
+    return render_template_string(PAGE, cfg=ALARMS)
 
 
 init_db()

@@ -61,7 +61,20 @@ void setup() {
   connectWiFi();
 }
 
+// Fixed schedule: send at 0 s, 30 s, 60 s... no matter how long reading/sending takes.
+unsigned long nextSendAt = 0;
+
 void loop() {
+  unsigned long now = millis();
+  if ((long)(now - nextSendAt) < 0) {
+    delay(20);        // not time yet - check again soon
+    return;
+  }
+  nextSendAt += SEND_EVERY_MS;
+  if ((long)(now - nextSendAt) >= 0) {
+    nextSendAt = now + SEND_EVERY_MS;   // fell far behind (e.g. slow WiFi) - restart the schedule
+  }
+
   sensors.requestTemperatures();
   float t = sensors.getTempCByIndex(0);
 
@@ -85,6 +98,4 @@ void loop() {
       Serial.printf("Temperature: %.2f C -> server answered %d\n", t, code);
     }
   }
-
-  delay(SEND_EVERY_MS);
 }
