@@ -20,7 +20,7 @@ ESP32 + DS18B20 ──HTTP──> nginx ──> Flask app (gunicorn) ──> SQL
 - [x] Live web page (updates every 2 s, countdown to next reading)
 - [x] Deployed to AWS with Terraform + Ansible
 - [x] GenAI with Claude Haiku 4.5 on AWS Bedrock: explains alarms, writes a daily summary, answers questions
-- [ ] Email alerts (SNS)
+- [x] Email alerts with the AI explanation (AWS SNS)
 - [ ] Dashboard chart
 
 ## Hardware
@@ -61,6 +61,12 @@ Terraform state is kept in an encrypted, versioned S3 bucket.
 - **Cost guard:** max 50 AI calls per day (`AI_DAILY_LIMIT`); usage and tokens at `/api/ai`.
 - **No AI key on the server:** Bedrock calls are signed with the EC2 instance's IAM role.
 - If AI is off or fails, the app keeps working with the plain alarm messages.
+
+## Email alerts (AWS SNS)
+- When an alarm fires, the server sends an email with the alarm, the AI explanation and a dashboard link.
+- Alarms from the same reading are combined into one email; max 20 emails per day (`EMAIL_DAILY_LIMIT`).
+- The server may only publish to its own SNS topic (IAM `sns:Publish` on that topic).
+- The address is set in `infra/terraform.tfvars` (`alert_email`); AWS sends a confirmation link first.
 
 ## Tests
 ```
