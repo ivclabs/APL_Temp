@@ -60,7 +60,7 @@ resource "aws_iam_role" "server" {
   })
 }
 
-# Only what it needs: read its own API key. (Bedrock + SNS are added in steps 5 and 6.)
+# Only what it needs: read its own API key. (SNS is added in step 6.)
 resource "aws_iam_role_policy" "read_api_key" {
   name = "read-api-key"
   role = aws_iam_role.server.id
@@ -70,6 +70,20 @@ resource "aws_iam_role_policy" "read_api_key" {
       Effect   = "Allow"
       Action   = "ssm:GetParameter"
       Resource = aws_ssm_parameter.api_key.arn
+    }]
+  })
+}
+
+# Use Claude on Bedrock (step 5). Only inference - it can't change any Bedrock settings.
+resource "aws_iam_role_policy" "bedrock" {
+  name = "use-claude-on-bedrock"
+  role = aws_iam_role.server.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "bedrock-mantle:CreateInference"
+      Resource = "*"
     }]
   })
 }

@@ -11,9 +11,9 @@
     aws_region: eu-north-1
 
   tasks:
-    - name: Install Python, nginx, git and sqlite
+    - name: Install Python 3.11, nginx, git and sqlite
       ansible.builtin.dnf:
-        name: [python3, python3-pip, nginx, git, sqlite]
+        name: [python3.11, python3.11-pip, nginx, git, sqlite]
         state: present
 
     - name: Create a user that only runs the app (not root)
@@ -30,11 +30,23 @@
         owner: "{{ app_user }}"
         mode: "0750"
 
+    # The Claude library needs Python 3.10+. Rebuild a venv made with the old Python 3.9.
+    - name: Check which Python the virtual environment uses
+      ansible.builtin.stat:
+        path: "{{ venv }}/bin/python3.11"
+      register: venv_py311
+
+    - name: Remove a virtual environment built with an older Python
+      ansible.builtin.file:
+        path: "{{ venv }}"
+        state: absent
+      when: not venv_py311.stat.exists
+
     - name: Install the app's Python packages in a virtual environment
       ansible.builtin.pip:
         requirements: "{{ app_dir }}/server/requirements.txt"
         virtualenv: "{{ venv }}"
-        virtualenv_command: python3 -m venv
+        virtualenv_command: python3.11 -m venv
       notify: restart app
 
     - name: Read the API key from Parameter Store (uses the server's IAM role)
@@ -52,6 +64,9 @@
         content: |
           API_KEY={{ api_key.stdout }}
           DB_PATH={{ data_dir }}/readings.db
+          AI_BACKEND=bedrock
+          AWS_REGION={{ aws_region }}
+          AI_DAILY_LIMIT=50
       no_log: true
       notify: restart app
 

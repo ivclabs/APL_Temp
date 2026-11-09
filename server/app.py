@@ -3,12 +3,17 @@
 Endpoints:
   POST /api/readings   ESP32 sends {"temp_c": 22.5}   (needs X-API-Key header)
   GET  /api/readings   latest readings as JSON
-  GET  /api/alarms     latest alarms as JSON
-  GET  /               simple web page with the latest readings and alarms
+  GET  /api/alarms     latest alarms as JSON (with the AI explanation when ready)
+  GET  /api/summary    AI-written summary of today
+  POST /api/ask        ask the AI a question about the data: {"question": "..."}
+  GET  /api/ai         AI status and usage today
+  GET  /               web page
 """
+import logging
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,6 +24,8 @@ from alarms import AlarmConfig, check_rules, cooldown_over, parse_time
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
+import ai  # noqa: E402  (after load_dotenv so it sees AI_* settings)
+
 API_KEY = os.environ.get("API_KEY", "")
 DB_PATH = os.environ.get("DB_PATH", str(BASE_DIR / "readings.db"))
 ALARMS = AlarmConfig.from_env()
@@ -28,7 +35,14 @@ READING_EVERY_S = int(os.environ.get("READING_EVERY_S", 30))  # must match HEART
 MIN_VALID_C = -55
 MAX_VALID_C = 125
 
+SUMMARY_MAX_AGE_MIN = 180   # write a new AI summary at most every 3 hours
+MAX_QUESTION_LEN = 300
+
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# AI calls take a few seconds - run them in the background so the ESP32 never waits.
+ai_jobs = ThreadPoolExecutor(max_workers=2)
 
 
 # ---------- Database ----------
@@ -68,6 +82,18 @@ def init_db():
                    created   TEXT NOT NULL
                )"""
         )
+        # Added in step 5: the AI's explanation of the alarm (filled in a few seconds later).
+        columns = [r[1] for r in db.execute("PRAGMA table_info(alarms)")]
+        if "ai_message" not in columns:
+            db.execute("ALTER TABLE alarms ADD COLUMN ai_message TEXT")
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS summaries (
+                   day       TEXT PRIMARY KEY,  -- local date
+                   text      TEXT NOT NULL,
+                   created   TEXT NOT NULL
+               )"""
+        )
+    ai.init_usage_table(DB_PATH)
 
 
 # ---------- Alarms ----------
@@ -95,14 +121,96 @@ def check_alarms(db, device, temp_c, now):
         if not cooldown_over(parse_time(last["created"]) if last else None, now, ALARMS):
             continue  # same alarm fired recently - stay quiet to avoid spam
 
-        db.execute(
+        cur = db.execute(
             "INSERT INTO alarms (device, kind, temp_c, message, created) VALUES (?, ?, ?, ?, ?)",
             (device, kind, temp_c, message, now.isoformat(timespec="seconds")),
         )
-        new_alarms.append({"kind": kind, "message": message})
+        new_alarms.append({"id": cur.lastrowid, "kind": kind, "message": message})
         app.logger.warning("ALARM %s: %s", kind, message)
 
     return new_alarms
+
+
+def limits_text():
+    return (f"high > {ALARMS.high_c} °C, low < {ALARMS.low_c} °C, "
+            f"rising >= {ALARMS.rise_c_per_min} °C/min")
+
+
+def explain_alarm_in_background(alarm_id, device, kind, message, now):
+    """Ask the AI to explain an alarm and save the answer next to it."""
+    try:
+        since = (now - timedelta(minutes=30)).isoformat(timespec="seconds")
+        with sqlite3.connect(DB_PATH) as db:
+            rows = db.execute(
+                "SELECT created, temp_c FROM readings WHERE device = ? AND created >= ? "
+                "ORDER BY id DESC LIMIT 120",
+                (device, since),
+            ).fetchall()
+        text = ai.explain_alarm(DB_PATH, kind, message, list(reversed(rows)), limits_text())
+        if text:
+            with sqlite3.connect(DB_PATH) as db:
+                db.execute("UPDATE alarms SET ai_message = ? WHERE id = ?", (text, alarm_id))
+    except Exception:
+        app.logger.exception("AI alarm explanation failed")
+
+
+# ---------- Data for the AI (summaries and questions) ----------
+
+def local_day_bounds(day):
+    """Local calendar day -> (start, end) as UTC ISO strings, to compare with 'created'."""
+    start = datetime.combine(day, time(0), tzinfo=ai.LOCAL_TZ)
+    end = start + timedelta(days=1)
+    return (start.astimezone(timezone.utc).isoformat(timespec="seconds"),
+            end.astimezone(timezone.utc).isoformat(timespec="seconds"))
+
+
+def day_data_text(db, day, label):
+    """Compact text about one day: overall stats, hourly averages and alarms."""
+    start, end = local_day_bounds(day)
+    rows = db.execute(
+        "SELECT created, temp_c FROM readings WHERE created >= ? AND created < ? ORDER BY id",
+        (start, end),
+    ).fetchall()
+    if not rows:
+        return f"{label} ({day}): no readings."
+
+    temps = [r[1] for r in rows]
+    hottest = max(rows, key=lambda r: r[1])
+    coldest = min(rows, key=lambda r: r[1])
+    lines = [
+        f"{label} ({day}): {len(rows)} readings from {ai.local_time(rows[0][0], '%H:%M')} "
+        f"to {ai.local_time(rows[-1][0], '%H:%M')}.",
+        f"Average {sum(temps) / len(temps):.2f} °C. "
+        f"Highest {hottest[1]:.2f} °C at {ai.local_time(hottest[0], '%H:%M')}. "
+        f"Lowest {coldest[1]:.2f} °C at {ai.local_time(coldest[0], '%H:%M')}.",
+        "Hourly (local time): average / min / max:",
+    ]
+    hours = {}
+    for created, temp in rows:
+        hours.setdefault(ai.local_time(created, "%H:00"), []).append(temp)
+    for hour, ts in hours.items():
+        lines.append(f"  {hour}  {sum(ts) / len(ts):.2f} / {min(ts):.2f} / {max(ts):.2f} °C")
+
+    alarms = db.execute(
+        "SELECT created, kind, message FROM alarms WHERE created >= ? AND created < ? ORDER BY id",
+        (start, end),
+    ).fetchall()
+    lines.append("Alarms:" if alarms else "Alarms: none.")
+    for created, kind, message in alarms:
+        lines.append(f"  {ai.local_time(created, '%H:%M')}  {kind}: {message}")
+    return "\n".join(lines)
+
+
+def question_data_text(db):
+    today = datetime.now(ai.LOCAL_TZ).date()
+    latest = db.execute("SELECT created, temp_c FROM readings ORDER BY id DESC LIMIT 10").fetchall()
+    return "\n\n".join([
+        f"Current local time: {datetime.now(ai.LOCAL_TZ).strftime('%Y-%m-%d %H:%M')}",
+        f"Alarm limits: {limits_text()}",
+        "Latest readings (oldest first):\n" + ai.format_readings(list(reversed(latest))),
+        day_data_text(db, today, "Today so far"),
+        day_data_text(db, today - timedelta(days=1), "Yesterday"),
+    ])
 
 
 # ---------- API ----------
@@ -132,6 +240,9 @@ def add_reading():
         (device, temp, created),
     )
     db.commit()
+
+    for alarm in new_alarms:
+        ai_jobs.submit(explain_alarm_in_background, alarm["id"], device, alarm["kind"], alarm["message"], now)
     return jsonify(ok=True, temp_c=temp, created=created, alarms=new_alarms), 201
 
 
@@ -149,10 +260,55 @@ def list_readings():
 def list_alarms():
     limit = min(request.args.get("limit", 50, type=int), 1000)
     rows = get_db().execute(
-        "SELECT device, kind, temp_c, message, created FROM alarms ORDER BY id DESC LIMIT ?",
+        "SELECT device, kind, temp_c, message, ai_message, created FROM alarms ORDER BY id DESC LIMIT ?",
         (limit,),
     ).fetchall()
     return jsonify([dict(r) for r in rows])
+
+
+@app.get("/api/summary")
+def get_summary():
+    """AI summary of today. Reuses the saved one if it is less than 3 hours old."""
+    today = datetime.now(ai.LOCAL_TZ).date()
+    db = get_db()
+    saved = db.execute("SELECT text, created FROM summaries WHERE day = ?", (today.isoformat(),)).fetchone()
+    now = datetime.now(timezone.utc)
+    if saved and now - parse_time(saved["created"]) < timedelta(minutes=SUMMARY_MAX_AGE_MIN):
+        return jsonify(day=today.isoformat(), text=saved["text"], created=saved["created"])
+
+    text = ai.daily_summary(DB_PATH, "today so far", day_data_text(db, today, "Today so far"))
+    if not text:
+        if saved:  # AI unavailable - an older summary is better than none
+            return jsonify(day=today.isoformat(), text=saved["text"], created=saved["created"])
+        return jsonify(error="AI summary not available right now"), 503
+
+    created = now.isoformat(timespec="seconds")
+    db.execute(
+        "INSERT INTO summaries (day, text, created) VALUES (?, ?, ?) "
+        "ON CONFLICT(day) DO UPDATE SET text = excluded.text, created = excluded.created",
+        (today.isoformat(), text, created),
+    )
+    db.commit()
+    return jsonify(day=today.isoformat(), text=text, created=created)
+
+
+@app.post("/api/ask")
+def ask():
+    question = str((request.get_json(silent=True) or {}).get("question", "")).strip()
+    if not question:
+        return jsonify(error="Type a question first"), 400
+    if len(question) > MAX_QUESTION_LEN:
+        return jsonify(error=f"Question too long (max {MAX_QUESTION_LEN} characters)"), 400
+
+    answer = ai.answer_question(DB_PATH, question, question_data_text(get_db()))
+    if not answer:
+        return jsonify(error="The AI is not available right now (or today's limit is used up)"), 503
+    return jsonify(question=question, answer=answer)
+
+
+@app.get("/api/ai")
+def ai_status():
+    return jsonify(ai.usage_today(DB_PATH))
 
 
 # ---------- Web page ----------
@@ -175,6 +331,11 @@ PAGE = """<!doctype html>
     .late .dot { background: #f29900; }
     .alarm { background: #fdecea; border-left: 4px solid #d93025; padding: .5rem .75rem; margin: .4rem 0; }
     .alarm small { color: #777; display: block; }
+    .ai { margin-top: .35rem; }
+    .ai-box { background: #eef3fd; border-left: 4px solid #1a73e8; padding: .6rem .8rem; }
+    #ask-form { display: flex; gap: .5rem; }
+    #ask-form input { flex: 1; min-width: 0; padding: .5rem; font-size: 1rem; }
+    #ask-form button { padding: .5rem 1rem; font-size: 1rem; }
     tr.new td { animation: flash 2s ease-out; }
     @keyframes flash { from { background: #fff3b0; } to { background: transparent; } }
   </style>
@@ -188,8 +349,20 @@ PAGE = """<!doctype html>
   <p class="muted">Limits: low &lt; {{ cfg.low_c }} °C · high &gt; {{ cfg.high_c }} °C ·
      rising ≥ {{ cfg.rise_c_per_min }} °C/min</p>
 
+  <h2>🤖 Today, by AI</h2>
+  <div class="ai-box"><span id="summary">Loading…</span>
+    <small id="summary-time" class="muted" style="display:block"></small></div>
+
   <h2>Alarms</h2>
   <div id="alarms"><p class="muted">Loading…</p></div>
+
+  <h2>🤖 Ask the AI</h2>
+  <form id="ask-form">
+    <input id="question" maxlength="300" placeholder="e.g. When was it warmest today?" autocomplete="off">
+    <button>Ask</button>
+  </form>
+  <p id="answer" class="ai-box" hidden></p>
+  <p id="ai-usage" class="muted"></p>
 
   <h2>Latest readings</h2>
   <table>
@@ -255,7 +428,18 @@ function showAlarms(alarms) {
     b.textContent = a.kind.toUpperCase();
     const small = document.createElement("small");
     small.textContent = localTime(a.created);
-    div.append(b, " – " + a.message, small);
+    div.append(b, " – " + a.message);
+    const explain = document.createElement("div");
+    explain.className = "ai";
+    if (a.ai_message) {
+      explain.textContent = "🤖 " + a.ai_message;
+      div.append(explain);
+    } else if (Date.now() - new Date(a.created).getTime() < 120000) {
+      explain.className = "ai muted";
+      explain.textContent = "🤖 AI is writing an explanation…";
+      div.append(explain);
+    }
+    div.append(small);
     box.append(div);
   }
 }
@@ -304,6 +488,57 @@ async function update() {
   showLive();
 }
 
+// ---------- AI: summary, questions, usage ----------
+
+async function loadSummary() {
+  const el = document.getElementById("summary");
+  try {
+    const r = await fetch("/api/summary");
+    const d = await r.json();
+    el.textContent = d.text || d.error;
+    document.getElementById("summary-time").textContent =
+      d.created ? "Written " + localTime(d.created) + " · updates every few hours" : "";
+  } catch (e) {
+    el.textContent = "Summary not available right now.";
+  }
+  loadUsage();
+}
+
+async function loadUsage() {
+  try {
+    const d = await (await fetch("/api/ai")).json();
+    document.getElementById("ai-usage").textContent = d.enabled
+      ? "AI calls today: " + d.calls + " / " + d.limit + " (" + d.model + ")"
+      : "AI is turned off.";
+  } catch (e) { /* not important */ }
+}
+
+document.getElementById("ask-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const input = document.getElementById("question");
+  const answer = document.getElementById("answer");
+  const button = event.target.querySelector("button");
+  if (!input.value.trim()) return;
+  button.disabled = true;
+  answer.hidden = false;
+  answer.textContent = "🤖 Thinking…";
+  try {
+    const r = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: input.value }),
+    });
+    const d = await r.json();
+    answer.textContent = d.answer ? "🤖 " + d.answer : d.error;
+  } catch (e) {
+    answer.textContent = "Can't reach the server.";
+  }
+  button.disabled = false;
+  loadUsage();
+});
+
+loadSummary();
+setInterval(loadSummary, 10 * 60 * 1000);   // check for a newer summary every 10 min
 update();
 setInterval(update, CHECK_EVERY_MS);
 setInterval(showLive, 1000);   // tick the countdown every second

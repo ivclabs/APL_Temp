@@ -1,11 +1,7 @@
 """Tests for the alarm rules. Run with:  venv/bin/pytest -q"""
 import os
-import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from alarms import AlarmConfig, check_rules, cooldown_over, rise_rate
 
