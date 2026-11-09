@@ -3,8 +3,11 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 
-def add(server, minutes_ago, temp, seconds=0):
-    t = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago, seconds=seconds)
+def add(server, minutes_ago, temp, seconds=0, align_s=None):
+    t = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    if align_s:  # move to the start of a chart time slot, so the test doesn't depend on the clock
+        t = datetime.fromtimestamp(int(t.timestamp()) // align_s * align_s, timezone.utc)
+    t -= timedelta(seconds=seconds)
     with sqlite3.connect(server.DB_PATH) as db:
         db.execute("INSERT INTO readings (device, temp_c, created) VALUES ('esp32', ?, ?)",
                    (temp, t.isoformat(timespec="seconds")))
@@ -12,8 +15,8 @@ def add(server, minutes_ago, temp, seconds=0):
 
 def test_history_averages_readings_into_buckets(server):
     # Two readings 2 s apart land in the same 12 s bucket (1 hour view) -> one averaged point.
-    add(server, 10, 4.0, seconds=0)
-    add(server, 10, 5.0, seconds=-2)
+    add(server, 10, 4.0, seconds=-1, align_s=12)
+    add(server, 10, 5.0, seconds=-3, align_s=12)
     add(server, 120, 9.9)                                 # older than 1 hour: not included
     d = server.app.test_client().get("/api/history?hours=1").get_json()
     assert d["bucket_s"] == 12

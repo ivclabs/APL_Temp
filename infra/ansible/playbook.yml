@@ -10,7 +10,7 @@
     app_user: apltemp
     aws_region: eu-north-1
     # Alarm limits (°C). Room-temperature test values while the probe is on the desk.
-    # In the fridge use: high 8, low 0. Change here, push, then run update.sh on the server.
+    # In the freezer use: high -12, low -30. Change here, push, then run update.sh on the server.
     alarm_high_c: 28
     alarm_low_c: 15
     alarm_rise_c_per_min: 1.0
