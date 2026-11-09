@@ -4,6 +4,7 @@ Endpoints:
   POST /api/readings   ESP32 sends {"temp_c": 22.5}   (needs X-API-Key header)
   GET  /api/readings   latest readings as JSON
   GET  /api/alarms     latest alarms as JSON (with the AI explanation when ready)
+  GET  /api/history    readings for the chart: ?hours=1|6|24, averaged into max 300 points
   GET  /api/summary    AI-written summary of today
   POST /api/ask        ask the AI a question about the data: {"question": "..."}
   GET  /api/ai         AI status and usage today
@@ -282,6 +283,40 @@ def list_alarms():
     return jsonify([dict(r) for r in rows])
 
 
+@app.get("/api/history")
+def history():
+    """Chart data. Readings are averaged into time buckets so the chart gets at most ~300 points,
+    however many readings there are (up to one every 2 s when the temperature changes)."""
+    hours = request.args.get("hours", 6, type=int)
+    if hours not in (1, 6, 24):
+        hours = 6
+    bucket_s = hours * 3600 // 300          # 1 h -> 12 s, 6 h -> 72 s, 24 h -> 288 s
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    db = get_db()
+    points = db.execute(
+        """SELECT AVG(CAST(strftime('%s', created) AS INTEGER)) AS t,
+                  AVG(temp_c) AS temp, MIN(temp_c) AS lo, MAX(temp_c) AS hi
+           FROM readings WHERE created >= ?
+           GROUP BY CAST(strftime('%s', created) AS INTEGER) / ?
+           ORDER BY t""",
+        (since, bucket_s),
+    ).fetchall()
+    alarms = db.execute(
+        "SELECT CAST(strftime('%s', created) AS INTEGER) AS t, kind, temp_c "
+        "FROM alarms WHERE created >= ? ORDER BY id",
+        (since,),
+    ).fetchall()
+    return jsonify(
+        hours=hours,
+        bucket_s=bucket_s,
+        # times in milliseconds since 1970 (what JavaScript's Date uses)
+        points=[{"t": int(r["t"] * 1000), "temp": round(r["temp"], 2),
+                 "min": r["lo"], "max": r["hi"]} for r in points],
+        alarms=[{"t": r["t"] * 1000, "kind": r["kind"], "temp": r["temp_c"]} for r in alarms],
+        limits={"high": ALARMS.high_c, "low": ALARMS.low_c},
+    )
+
+
 @app.get("/api/summary")
 def get_summary():
     """AI summary of today. Reuses the saved one if it is less than 3 hours old."""
@@ -336,7 +371,21 @@ PAGE = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>APL_Temp</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; background: #fcfcfb; color: #0b0b0b; }
+    /* Chart */
+    .ranges { display: flex; gap: .4rem; margin: .5rem 0; }
+    .ranges button { font: inherit; font-size: .9rem; padding: .3rem .8rem; border: 1px solid #e1e0d9;
+                     background: #fcfcfb; color: #52514e; border-radius: 6px; cursor: pointer; }
+    .ranges button[aria-pressed="true"] { border-color: #0b0b0b; color: #0b0b0b; font-weight: 600; }
+    .chart { position: relative; touch-action: pan-y; }
+    .chart.loading svg { opacity: .5; }
+    .chart svg { display: block; width: 100%; height: 220px; }
+    .chart text { font-size: 11px; fill: #52514e; font-variant-numeric: tabular-nums; }
+    .tip { position: absolute; pointer-events: none; background: #fff; border: 1px solid #e1e0d9;
+           border-radius: 6px; padding: .3rem .5rem; font-size: .8rem; box-shadow: 0 2px 6px rgba(0,0,0,.08);
+           white-space: nowrap; }
+    .tip b { font-size: .95rem; }
+    .tip .muted { display: block; }
     .now { font-size: 3rem; font-weight: bold; margin: .5rem 0; }
     table { width: 100%; border-collapse: collapse; }
     td, th { text-align: left; padding: .3rem; border-bottom: 1px solid #ddd; }
@@ -364,6 +413,14 @@ PAGE = """<!doctype html>
 
   <p class="muted">Limits: low &lt; {{ cfg.low_c }} °C · high &gt; {{ cfg.high_c }} °C ·
      rising ≥ {{ cfg.rise_c_per_min }} °C/min</p>
+
+  <h2>Temperature</h2>
+  <div class="ranges" role="group" aria-label="Time range">
+    <button data-hours="1">1 hour</button>
+    <button data-hours="6" aria-pressed="true">6 hours</button>
+    <button data-hours="24">24 hours</button>
+  </div>
+  <div id="chart" class="chart"><p class="muted">Loading chart…</p></div>
 
   <h2>🤖 Today, by AI</h2>
   <div class="ai-box"><span id="summary">Loading…</span>
@@ -552,6 +609,168 @@ document.getElementById("ask-form").addEventListener("submit", async (event) => 
   button.disabled = false;
   loadUsage();
 });
+
+// ---------- Chart (plain SVG, no library) ----------
+// One line = temperature. Red hairlines = alarm limits. Red dots = alarms.
+// Hover / touch shows the exact value. The "Latest readings" table below is the table view.
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const COLOR = { line: "#2a78d6", limit: "#d03b3b", alarm: "#d03b3b", grid: "#e1e0d9",
+                surface: "#fcfcfb", cross: "#52514e" };
+let chartHours = 6;
+let chartData = null;
+
+function el(name, attrs, parent) {
+  const node = document.createElementNS(SVG_NS, name);
+  for (const k in attrs) node.setAttribute(k, attrs[k]);
+  if (parent) parent.append(node);
+  return node;
+}
+
+function niceStep(range) {
+  for (const step of [0.5, 1, 2, 5, 10, 20]) if (range / step <= 5) return step;
+  return 50;
+}
+
+function clock(ms) {
+  return new Date(ms).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" });
+}
+
+function drawChart() {
+  const box = document.getElementById("chart");
+  box.classList.remove("loading");
+  const d = chartData;
+  if (!d || d.points.length === 0) {
+    box.replaceChildren();
+    const p = document.createElement("p");
+    p.className = "muted";
+    p.textContent = "No readings in this period.";
+    box.append(p);
+    return;
+  }
+
+  const W = box.clientWidth || 360, H = 220;
+  const m = { top: 10, right: 58, bottom: 22, left: 34 };
+  const now = Date.now(), t0 = now - d.hours * 3600 * 1000;
+
+  // Y range: the data, plus each limit if it is close enough to matter.
+  const temps = d.points.flatMap(p => [p.min, p.max]);
+  let lo = Math.min(...temps), hi = Math.max(...temps);
+  for (const v of [d.limits.low, d.limits.high]) {
+    if (v >= lo - 5 && v <= hi + 5) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  }
+  const step = niceStep(Math.max(hi - lo, 1));
+  lo = Math.floor((lo - 0.3) / step) * step;
+  hi = Math.ceil((hi + 0.3) / step) * step;
+
+  const x = t => m.left + (t - t0) / (now - t0) * (W - m.left - m.right);
+  const y = v => m.top + (hi - v) / (hi - lo) * (H - m.top - m.bottom);
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+    "aria-label": `Temperature over the last ${d.hours} hours, between ${Math.min(...temps).toFixed(1)} and ${Math.max(...temps).toFixed(1)} °C` });
+
+  // Gridlines + y labels
+  for (let v = lo; v <= hi + 1e-9; v += step) {
+    el("line", { x1: m.left, x2: W - m.right, y1: y(v), y2: y(v), stroke: COLOR.grid, "stroke-width": 1 }, svg);
+    el("text", { x: m.left - 6, y: y(v) + 4, "text-anchor": "end" }, svg).textContent = (+v.toFixed(1)) + "°";
+  }
+  // X labels
+  const tick = { 1: 15, 6: 60, 24: 240 }[d.hours] * 60 * 1000;
+  for (let t = Math.ceil(t0 / tick) * tick; t <= now; t += tick) {
+    el("text", { x: x(t), y: H - 6, "text-anchor": "middle" }, svg).textContent = clock(t);
+  }
+  // Limit lines (only when inside the visible range), labelled at the right
+  for (const [name, v] of [["High", d.limits.high], ["Low", d.limits.low]]) {
+    if (v < lo || v > hi) continue;
+    el("line", { x1: m.left, x2: W - m.right, y1: y(v), y2: y(v), stroke: COLOR.limit, "stroke-width": 1 }, svg);
+    el("text", { x: W - m.right + 6, y: y(v) + 4 }, svg).textContent = `${name} ${v}°`;
+  }
+  // The temperature line. Break it where the ESP32 was silent (gap > 3 buckets and > 90 s).
+  const gapMs = Math.max(3 * d.bucket_s, 90) * 1000;
+  let path = "";
+  d.points.forEach((p, i) => {
+    const jump = i === 0 || p.t - d.points[i - 1].t > gapMs;
+    path += (jump ? "M" : "L") + x(p.t).toFixed(1) + "," + y(p.temp).toFixed(1);
+  });
+  el("path", { d: path, fill: "none", stroke: COLOR.line, "stroke-width": 2,
+               "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+  // Latest value label at the line's end
+  const last = d.points[d.points.length - 1];
+  el("circle", { cx: x(last.t), cy: y(last.temp), r: 4, fill: COLOR.line, stroke: COLOR.surface, "stroke-width": 2 }, svg);
+  // Alarm dots
+  for (const a of d.alarms) {
+    if (a.t < t0) continue;
+    el("circle", { cx: x(a.t), cy: y(a.temp), r: 5, fill: COLOR.alarm, stroke: COLOR.surface, "stroke-width": 2 }, svg);
+  }
+
+  // Hover / touch: crosshair snaps to the nearest point
+  const cross = el("line", { y1: m.top, y2: H - m.bottom, stroke: COLOR.cross, "stroke-width": 1, visibility: "hidden" }, svg);
+  const dot = el("circle", { r: 5, fill: COLOR.line, stroke: COLOR.surface, "stroke-width": 2, visibility: "hidden" }, svg);
+  const hit = el("rect", { x: m.left, y: 0, width: W - m.left - m.right, height: H, fill: "transparent" }, svg);
+  const tip = document.createElement("div");
+  tip.className = "tip";
+  tip.hidden = true;
+
+  function show(event) {
+    const r = svg.getBoundingClientRect();
+    const px = (event.clientX - r.left) * (W / r.width);
+    const tAt = t0 + (px - m.left) / (W - m.left - m.right) * (now - t0);
+    let best = d.points[0];
+    for (const p of d.points) if (Math.abs(p.t - tAt) < Math.abs(best.t - tAt)) best = p;
+    const near = d.alarms.filter(a => Math.abs(a.t - best.t) <= Math.max(d.bucket_s, 30) * 1000);
+    cross.setAttribute("x1", x(best.t)); cross.setAttribute("x2", x(best.t));
+    dot.setAttribute("cx", x(best.t)); dot.setAttribute("cy", y(best.temp));
+    cross.setAttribute("visibility", "visible"); dot.setAttribute("visibility", "visible");
+
+    tip.replaceChildren();
+    const value = document.createElement("b");
+    value.textContent = best.temp.toFixed(2) + " °C";
+    const when = document.createElement("span");
+    when.className = "muted";
+    when.textContent = clock(best.t) + (best.max - best.min >= 0.1
+      ? ` · range ${best.min.toFixed(1)}–${best.max.toFixed(1)} °C` : "");
+    tip.append(value, when);
+    for (const a of near) {
+      const s = document.createElement("span");
+      s.className = "muted";
+      s.textContent = "⚠ " + a.kind.toUpperCase() + " alarm";
+      tip.append(s);
+    }
+    tip.hidden = false;
+    const left = Math.min(Math.max(x(best.t) * r.width / W - tip.offsetWidth / 2, 0), r.width - tip.offsetWidth);
+    tip.style.left = left + "px";
+    tip.style.top = "0px";
+  }
+  function hide() {
+    tip.hidden = true;
+    cross.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden");
+  }
+  hit.addEventListener("pointermove", show);
+  hit.addEventListener("pointerdown", show);
+  hit.addEventListener("pointerleave", hide);
+
+  box.replaceChildren(svg, tip);
+}
+
+async function loadChart(fade) {
+  // On a range change, keep the old chart (faded) while loading. Quiet for the 10 s refresh.
+  if (fade) document.getElementById("chart").classList.add("loading");
+  try {
+    chartData = await (await fetch("/api/history?hours=" + chartHours)).json();
+  } catch (e) { /* keep the old chart */ }
+  drawChart();
+}
+
+document.querySelectorAll(".ranges button").forEach(button => {
+  button.addEventListener("click", () => {
+    chartHours = +button.dataset.hours;
+    document.querySelectorAll(".ranges button").forEach(b => b.setAttribute("aria-pressed", b === button));
+    loadChart(true);
+  });
+});
+window.addEventListener("resize", drawChart);
+loadChart();
+setInterval(loadChart, 10000);   // new points every 10 s
 
 loadSummary();
 setInterval(loadSummary, 10 * 60 * 1000);   // check for a newer summary every 10 min

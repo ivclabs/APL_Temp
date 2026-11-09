@@ -9,6 +9,11 @@
     data_dir: /var/lib/apl-temp      # database lives here, outside the code folder
     app_user: apltemp
     aws_region: eu-north-1
+    # Alarm limits (°C). Room-temperature test values while the probe is on the desk.
+    # In the fridge use: high 8, low 0. Change here, push, then run update.sh on the server.
+    alarm_high_c: 28
+    alarm_low_c: 15
+    alarm_rise_c_per_min: 1.0
 
   tasks:
     - name: Install Python 3.11, nginx, git and sqlite
@@ -76,6 +81,9 @@
           AI_BACKEND=bedrock
           AWS_REGION={{ aws_region }}
           AI_DAILY_LIMIT=50
+          ALARM_HIGH_C={{ alarm_high_c }}
+          ALARM_LOW_C={{ alarm_low_c }}
+          ALARM_RISE_C_PER_MIN={{ alarm_rise_c_per_min }}
           ALERT_TOPIC_ARN={{ settings.results[0].stdout if settings.results[0].rc == 0 else '' }}
           PUBLIC_URL={{ settings.results[1].stdout if settings.results[1].rc == 0 else '' }}
       no_log: true
