@@ -20,3 +20,6 @@ venv/
 
 # Local notes for Claude Code (personal, not published)
 CLAUDE.md
+
+# Server database
+*.db
