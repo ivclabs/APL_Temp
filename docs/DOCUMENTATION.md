@@ -1,6 +1,6 @@
 # APL_Temp – Project Documentation
 
-**An AI-powered refrigerator temperature monitor on AWS**
+**An AI-powered freezer temperature monitor on AWS**
 
 - Live dashboard: **http://56.228.124.110**
 - Source code: **https://github.com/ivclabs/APL_Temp**
@@ -19,11 +19,11 @@
 
 ## 1. Goal
 
-A refrigerator can fail without anyone noticing. Someone might leave the door open, the
+A freezer can fail without anyone noticing. Someone might leave the door open, the
 compressor might stop, or the power might go out. By the time someone notices, the food may
-already be unsafe.
+already have thawed and be unsafe.
 
-The goal of this project is a small device that measures the temperature inside a fridge
+The goal of this project is a small device that measures the temperature inside a freezer
 and sends it to a web server in the cloud. The server:
 
 - shows the temperature live on a web page that works on a phone,
@@ -50,7 +50,7 @@ Requirements from the course:
 
 ```mermaid
 flowchart LR
-    S[DS18B20 probe<br/>in the fridge] -->|1-Wire| E[ESP32-C3]
+    S[DS18B20 probe<br/>in the freezer] -->|1-Wire| E[ESP32-C3]
     E -->|WiFi, HTTP POST<br/>+ API key| N[nginx<br/>port 80]
     subgraph AWS EC2 server
         N --> F[Flask app<br/>gunicorn]
@@ -66,7 +66,7 @@ flowchart LR
 | Part | Why I chose it |
 |---|---|
 | **Olimex ESP32-C3-DevKit-Lipo** | Cheap microcontroller with built-in WiFi. It has a battery connector, so it keeps running for a while during a power cut. It only supports **2.4 GHz** WiFi, which I had to remember during setup. |
-| **DS18B20 waterproof probe** | A digital sensor, so there is no analog noise. It is accurate to ±0.5 °C, works from −55 to +125 °C, and is sealed in a steel tip, so it can go inside a fridge. |
+| **DS18B20 waterproof probe** | A digital sensor, so there is no analog noise. It is accurate to ±0.5 °C, works from −55 to +125 °C, and is sealed in a steel tip, so it can go inside a freezer (−18 °C is well inside its range). Only the thin cable goes through the door seal; the ESP32 stays outside, where WiFi works. |
 | **4.7 kΩ resistor** | The DS18B20 uses the 1-Wire bus, which needs a pull-up resistor between DATA and 3.3 V. |
 
 Wiring: probe DATA → GPIO7, VCC → 3.3 V, GND → GND, and 4.7 kΩ between DATA and 3.3 V.
@@ -85,14 +85,14 @@ Wiring: probe DATA → GPIO7, VCC → 3.3 V, GND → GND, and 4.7 kΩ between DA
 | Email | AWS SNS | It sends email with a few lines of code, and the server is only allowed to publish to its own topic |
 | Chart | Plain SVG + JavaScript | No extra library. It loads fast on a phone. |
 
-### 2.4 What does "normal" look like in a fridge?
+### 2.4 What does "normal" look like in a freezer?
 
-To make the AI useful, I researched how fridge temperatures behave:
+To make the AI useful, I researched how freezer temperatures behave:
 
-- A fridge should be between **+2 and +5 °C**. Above **+8 °C** food safety is at risk. Below **0 °C** food freezes.
-- The compressor switches on and off, so the temperature naturally goes up and down by 1–2 °C in cycles of 20–60 minutes. Frost-free fridges also defrost a few times a day.
-- **Door left open**: the temperature rises a few degrees within minutes, then recovers within 10–30 minutes.
-- **Cooling failure or power cut**: a steady climb for hours, and the normal cycles stop.
+- A freezer should be at **−18 °C or colder** (usually −18 to −22 °C). Above **−12 °C** food quality and safety start to suffer. Around **−5 to 0 °C** food starts to thaw.
+- The compressor switches on and off, so the temperature naturally goes up and down by 1–3 °C in cycles of 20–60 minutes. Frost-free freezers also defrost a few times a day, which warms the air by a few degrees for 15–30 minutes. That is not a fault.
+- **Door left open or warm food added**: the temperature rises several degrees within minutes, then recovers within 30–60 minutes.
+- **Cooling failure or power cut**: a steady climb for hours, and the normal cycles stop. A closed, full freezer keeps the food frozen for about a day, so an early warning matters.
 - **Wrong thermostat setting**: stable, but at the wrong level.
 - **Tampering or a cyber attack** on a network-connected cooling controller is rare but possible. It would show up as cooling that stops, or a new wrong temperature level, with no sign of an open door, for example at an odd hour or repeating on a schedule.
 
@@ -196,29 +196,30 @@ File: `server/ai.py`. Claude Haiku 4.5 on AWS Bedrock does three jobs:
 | Job | When | Input to the AI | Output |
 |---|---|---|---|
 | **Explain an alarm** | each time an alarm fires | the alarm, the limits and the last 30 minutes of readings | 2–3 sentences: what happened, the most likely cause, what to check first |
-| **Daily summary** | when the page is opened, at most once every 3 hours | hourly min/avg/max, alarms, latest readings | 3–5 sentences about the fridge today |
+| **Daily summary** | when the page is opened, at most once every 3 hours | hourly min/avg/max, alarms, latest readings | 3–5 sentences about the freezer today |
 | **Ask the AI** | a visitor types a question | the question + today's data | an answer based only on the data |
 
 How the AI is controlled:
-- **A system prompt with fridge knowledge** (section 2.4). Normal range, compressor cycles,
-  door open, cooling failure, probe outside the fridge, sensor faults, and tampering.
+- **A system prompt with freezer knowledge** (section 2.4). Normal range, compressor and defrost
+  cycles, door open, cooling failure, probe outside the freezer, sensor faults, and tampering.
   Tampering is only mentioned when ordinary causes don't fit, and only as "something to rule
   out". This keeps the alerts trustworthy.
-- **Topic limit:** the AI only talks about this fridge. Off-topic questions get a one-line refusal.
+- **Topic limit:** the AI only talks about this freezer. Off-topic questions get a one-line refusal.
 - **Prompt injection protection:** the question comes from a public web page, so the AI is told to ignore any instructions inside it. The data is wrapped in `<data>` tags. Questions are limited to 300 characters.
 - **Never invent data:** the AI must use the exact numbers and times from the data.
 - **Runs in the background:** the ESP32 gets its answer immediately, and the AI explanation appears on the page a few seconds later.
 - **Cost guard:** at most 50 AI calls per day. Usage and tokens are shown at `/api/ai`.
 - **Fails safely:** if the AI is off, slow or broken, the app keeps working with the plain alarm messages.
 
-Tested examples (fridge scenarios):
+Tested examples (freezer scenarios, alarm limits high −12 °C / low −30 °C):
 
 | Situation (test data) | What the AI wrote |
 |---|---|
-| Door opened | "The most likely cause is that the fridge door was left open…" |
-| Slow climb during the night, cycles stopped | "…the compressor is not running. Check whether the fridge is plugged in…" |
-| Probe lying on the desk (23 °C) | "…usually means the probe is outside the fridge, perhaps during testing." |
-| "Write me a poem about football" | "I can only help with questions about this refrigerator." |
+| Door opened: −19 °C → −11.6 °C in 2 min | "The temperature jumped 7.6 °C in just 2 minutes… suggests either the freezer door is open or a large amount of warm food was just added. Check first if the door is closed and sealed properly…" |
+| Slow climb at 03:00, no cycles | "This steady, continuous rise with no normal cooling cycles is a sign of cooling failure or a power cut… Is the freezer plugged in and switched on?… listen for the compressor running" |
+| Normal freezer, −19.4 °C | "Yes, the freezer is OK right now… -19.4 °C, which is in the normal range for a freezer." |
+| Probe lying on the desk (23 °C) | "The probe appears to be outside the freezer… Put the probe back inside the freezer so you can see the real temperature." |
+| "Write me a poem about football" | "I can only help with questions about this freezer and its temperature monitor." |
 
 ### 3.6 Step 6 – Email alerts (AWS SNS)
 
@@ -263,20 +264,31 @@ Everything planned works and is live at **http://56.228.124.110**:
 - [x] Alarm rules: high, low, rising fast, with a cooldown
 - [x] Live web page with countdown, chart, alarms and readings
 - [x] Deployed to AWS with Terraform + Ansible (can be recreated with one command)
-- [x] Generative AI: alarm explanations, daily summary, questions, focused on the fridge
+- [x] Generative AI: alarm explanations, daily summary, questions, focused on the freezer
 - [x] Email alerts with the AI explanation
 - [x] 30 automated tests
 
-**Note about the limits:** during development the probe lay on my desk, so the alarm limits
-are test values (high 28 °C, low 15 °C), which let me trigger alarms by holding the probe. When
-the probe goes into the fridge, the limits change to **high 8 °C / low 0 °C**. This is a
-one-line change in `infra/ansible/playbook.yml` plus `update.sh`.
+**Test setup vs. final setup:** the system was developed and tested at room temperature with
+the probe on my desk. The alarm limits were test values (**high 28 °C, low 15 °C**), so I could
+trigger alarms by holding the probe in my hand or putting it in warm water.
+
+The **final test is in a freezer**, with these limits:
+
+| Setting | Test (desk) | Final (freezer) | Why |
+|---|---|---|---|
+| High limit | 28 °C | **−12 °C** | above −12 °C food quality and safety suffer |
+| Low limit | 15 °C | **−30 °C** | colder than this means a wrong setting or a sensor fault |
+| Rising limit | 1.0 °C/min | 1.0 °C/min | catches an open door or a stopped compressor quickly |
+
+Changing the limits is a one-line change in `infra/ansible/playbook.yml` plus `update.sh`.
+The code doesn't change.
 
 **Possible improvements:**
 - HTTPS (a domain name + Let's Encrypt), so the API key is encrypted on the way to the server.
 - Notice when the device goes offline and send an email (for example after a power cut).
 - Battery voltage reporting from the ESP32.
 - Several sensors (fridge + freezer) on one dashboard.
+- Let the limits be changed from the web page instead of Ansible.
 - A newer Claude model when it becomes available for this AWS account.
 
 ---
@@ -295,17 +307,18 @@ one-line change in `infra/ansible/playbook.yml` plus `update.sh`.
 | 8 | Claude Haiku 5.5 was "not available for this account" | The newest model isn't open for every AWS account yet | Switched to Claude Haiku 4.5 through the EU inference profile |
 | 9 | Haiku 4.5 calls failed with the newest Python SDK | SDK 2.x sends an API version that Bedrock only accepts for newer models | Pinned the `anthropic` SDK to version 1.x |
 | 10 | The AI library didn't install on the server | Amazon Linux 2023 has Python 3.9, and the SDK needs 3.10+ | Ansible installs Python 3.11 and builds the venv with it |
-| 11 | The AI blamed fast temperature jumps on a "sensor malfunction" | The AI didn't know the probe reacts in seconds when touched | Added facts about the probe, and later full fridge knowledge, to the system prompt |
+| 11 | The AI blamed fast temperature jumps on a "sensor malfunction" | The AI didn't know the probe reacts in seconds when touched | Added facts about the probe, and later full freezer knowledge, to the system prompt |
 | 12 | A broken version was deployed once | A deploy command ran even though an earlier file edit had failed | Fixed it in the next commit. Now each step stops on the first error, and deploys run separately. |
 | 13 | Risk of high AI costs or an inbox full of emails | A flapping temperature could trigger many alarms | Daily limits (50 AI calls, 20 emails) and a 15-minute alarm cooldown |
 | 14 | The chart could get thousands of points | Readings can arrive every 2 s | The server averages the readings into at most ~300 time slots |
 | 15 | Secrets must not end up on GitHub | WiFi password, API key, email | `.gitignore` for `secrets.h`, `.env`, `terraform.tfvars`. On AWS the key lives in Parameter Store. |
+| 16 | After switching the AI to freezer knowledge, it said the freezer was "far too warm" when the probe was on my desk | The AI took 23 °C as the real freezer temperature | Told the AI that a steady room temperature means the probe is outside the freezer, because a broken freezer warms slowly |
 
 ---
 
 ## 6. Conclusion
 
-The project works from end to end. A probe in a fridge sends its temperature to a server on
+The project works from end to end. A probe in a freezer sends its temperature to a server on
 AWS. The server shows it live and raises alarms. Generative AI turns raw numbers into advice a
 non-expert can act on, like "the door was probably left open, check it", and that advice
 arrives by email within seconds.
@@ -316,7 +329,7 @@ What I learned:
   made problems easy to find. The git history shows exactly how the project grew.
 - **Infrastructure as code is worth it.** Terraform and Ansible let me rebuild the whole server
   with one command, and the configuration is documented in the code itself.
-- **AI needs context and limits.** The model gave weak answers until it knew about fridges and
+- **AI needs context and limits.** The model gave weak answers until it knew about freezers and
   the probe. Clear instructions, a narrow topic, real data and "never invent numbers" made the
   answers useful and trustworthy.
 - **Plan for failure.** The AI, the email service or the WiFi can fail. The system keeps

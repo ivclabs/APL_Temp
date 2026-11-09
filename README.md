@@ -3,7 +3,7 @@
 **Live: http://56.228.124.110** · **Full documentation: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)**
 
 Final project for the APL practice period. A DS18B20 temperature sensor on an
-ESP32-C3 sends readings to a web server on AWS. The server checks thresholds,
+ESP32-C3 in a freezer sends readings to a web server on AWS. The server checks thresholds,
 sends alerts, and uses Generative AI (AWS Bedrock) to explain alerts, summarize
 data, and answer questions about it.
 

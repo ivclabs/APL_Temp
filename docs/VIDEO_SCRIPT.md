@@ -7,13 +7,15 @@ Before recording:
 - The ESP32 is plugged in and the dashboard shows "Live"
 - Open tabs: the dashboard, the GitHub repo, `docs/DOCUMENTATION.md`, an email from APL_Temp
 - Have a cup of warm water (or your hand) ready to trigger an alarm
+- If you film the final freezer test: show the probe cable going through the door seal and the
+  dashboard showing about −18 °C, then open the door for a minute and watch the temperature rise
 
 ---
 
 ## 0:00 – 0:30 Introduction
 **Show:** the dashboard on screen.
 
-> "Hi, this is APL_Temp, my final project. It is a temperature monitor for a refrigerator.
+> "Hi, this is APL_Temp, my final project. It is a temperature monitor for a freezer.
 > A sensor sends the temperature to a server on AWS, and Generative AI explains alarms in plain
 > language and sends them by email. The site is live at 56.228.124.110."
 
@@ -38,14 +40,15 @@ Before recording:
 ## 2:00 – 3:30 Live demo (the most important part)
 **Show:** the dashboard. Put the probe in warm water or hold it.
 
-> "Now I warm the probe. Watch the number: it updates within two seconds…
+> "For the demo I use test limits: high 28 degrees. In the freezer the limits are minus 12 and minus 30.
+> Now I warm the probe. Watch the number: it updates within two seconds…
 > The chart shows the spike, the red line is the alarm limit, and here is the alarm."
 
 Wait for the 🤖 text to appear (a few seconds).
 
 > "This is the Generative AI part. Claude, running on AWS Bedrock, got the last 30 minutes of
 > readings and explains what happened, the most likely cause and what to check first.
-> The AI is focused on the refrigerator: it knows the normal fridge range, door openings,
+> The AI is focused on the freezer: it knows that a freezer should be minus 18 or colder, door openings,
 > cooling failure and power cuts, and it can mention tampering with the cooling controller,
 > but only when normal causes don't explain the pattern."
 
@@ -55,7 +58,7 @@ Wait for the 🤖 text to appear (a few seconds).
 
 ## 3:30 – 4:15 More AI: summary and questions
 **Show:** "Today, by AI", then type in "Ask the AI":
-1. `Was the fridge temperature safe today?`
+1. `Was the freezer temperature safe today?`
 2. `Write me a poem about football` → it refuses
 
 > "The AI also writes a daily summary and answers questions, using only the real data.
@@ -73,6 +76,6 @@ Wait for the 🤖 text to appear (a few seconds).
 
 > "I ran into some problems, for example: the newest Claude model wasn't available for my AWS
 > account, so I used Haiku 4.5; two server workers crashed on start-up; and at first the AI blamed
-> the sensor when I touched it. Giving the AI knowledge about fridges fixed that.
+> the sensor when I touched it. Giving the AI knowledge about freezers fixed that.
 > What I learned: build in small steps, use infrastructure as code, and give the AI clear context
 > and limits. Thank you for watching!"
