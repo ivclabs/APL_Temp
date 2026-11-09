@@ -1,0 +1,95 @@
+# Sets up the APL_Temp server. Safe to run again - it only changes what is different.
+# First boot: run by user-data.  Later updates: sudo /opt/apl-temp/infra/update.sh
+- hosts: localhost
+  connection: local
+  become: true
+  vars:
+    app_dir: /opt/apl-temp
+    venv: /opt/apl-temp/venv
+    data_dir: /var/lib/apl-temp      # database lives here, outside the code folder
+    app_user: apltemp
+    aws_region: eu-north-1
+
+  tasks:
+    - name: Install Python, nginx, git and sqlite
+      ansible.builtin.dnf:
+        name: [python3, python3-pip, nginx, git, sqlite]
+        state: present
+
+    - name: Create a user that only runs the app (not root)
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        system: true
+        shell: /sbin/nologin
+        create_home: false
+
+    - name: Create the data folder for the database
+      ansible.builtin.file:
+        path: "{{ data_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: "0750"
+
+    - name: Install the app's Python packages in a virtual environment
+      ansible.builtin.pip:
+        requirements: "{{ app_dir }}/server/requirements.txt"
+        virtualenv: "{{ venv }}"
+        virtualenv_command: python3 -m venv
+      notify: restart app
+
+    - name: Read the API key from Parameter Store (uses the server's IAM role)
+      ansible.builtin.command: >
+        aws ssm get-parameter --name /apl-temp/api_key --with-decryption
+        --region {{ aws_region }} --query Parameter.Value --output text
+      register: api_key
+      changed_when: false
+      no_log: true
+
+    - name: Write the app settings (only root can read this file)
+      ansible.builtin.copy:
+        dest: /etc/apl-temp.env
+        mode: "0600"
+        content: |
+          API_KEY={{ api_key.stdout }}
+          DB_PATH={{ data_dir }}/readings.db
+      no_log: true
+      notify: restart app
+
+    - name: Install the app as a service (starts on boot, restarts if it crashes)
+      ansible.builtin.copy:
+        src: files/apl-temp.service
+        dest: /etc/systemd/system/apl-temp.service
+        mode: "0644"
+      notify: restart app
+
+    - name: Tell nginx to pass web traffic to the app
+      ansible.builtin.copy:
+        src: files/nginx-apl-temp.conf
+        dest: /etc/nginx/default.d/apl-temp.conf
+        mode: "0644"
+      notify: reload nginx
+
+    - name: Start the app and keep it on after reboots
+      ansible.builtin.systemd:
+        name: apl-temp
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Start nginx and keep it on after reboots
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+
+  handlers:
+    - name: restart app
+      ansible.builtin.systemd:
+        name: apl-temp
+        state: restarted
+        daemon_reload: true
+
+    - name: reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded

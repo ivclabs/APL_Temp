@@ -1,0 +1,16 @@
+[Unit]
+Description=APL_Temp Flask app (gunicorn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=apltemp
+WorkingDirectory=/opt/apl-temp/server
+EnvironmentFile=/etc/apl-temp.env
+# 2 workers is plenty for one ESP32 and a few viewers. Listens only locally - nginx is the front door.
+ExecStart=/opt/apl-temp/venv/bin/gunicorn --workers 2 --bind 127.0.0.1:8000 --access-logfile - app:app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

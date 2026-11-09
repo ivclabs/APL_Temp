@@ -23,3 +23,10 @@ CLAUDE.md
 
 # Server database
 *.db
+
+# Terraform: secrets and local working files (state lives in S3)
+infra/terraform.tfvars
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/tfplan

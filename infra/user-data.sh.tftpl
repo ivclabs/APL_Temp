@@ -1,0 +1,12 @@
+#!/bin/bash
+# Runs once, on the server's first boot. Log: /var/log/cloud-init-output.log
+set -euxo pipefail
+export HOME=/root   # cloud-init runs without HOME; Ansible needs it for temp files
+
+dnf -y install git ansible-core || { dnf -y install git python3-pip && pip3 install ansible-core; }
+
+git clone ${repo_url} /opt/apl-temp
+
+# The playbook does the real setup (Python, nginx, app service).
+PLAYBOOK=$(command -v ansible-playbook || echo /usr/local/bin/ansible-playbook)
+$PLAYBOOK /opt/apl-temp/infra/ansible/playbook.yml -e aws_region=${region}
