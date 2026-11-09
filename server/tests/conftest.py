@@ -59,3 +59,25 @@ def fake_ai(monkeypatch):
     monkeypatch.setattr(ai, "MODEL", "claude-haiku-5-5")
     monkeypatch.setattr(ai, "_client", fake)
     return fake
+
+
+class FakeSNS:
+    """Stands in for AWS SNS: records emails instead of sending them."""
+
+    def __init__(self):
+        self.sent = []
+
+    def publish(self, **kwargs):
+        self.sent.append(kwargs)
+        return {"MessageId": "fake"}
+
+
+@pytest.fixture
+def fake_sns(monkeypatch):
+    import notify
+
+    fake = FakeSNS()
+    monkeypatch.setattr(notify, "TOPIC_ARN", "arn:aws:sns:eu-north-1:123456789012:test")
+    monkeypatch.setattr(notify, "PUBLIC_URL", "http://example.test")
+    monkeypatch.setattr(notify, "_sns", fake)
+    return fake

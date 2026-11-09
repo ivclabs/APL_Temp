@@ -24,7 +24,8 @@ from alarms import AlarmConfig, check_rules, cooldown_over, parse_time
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
-import ai  # noqa: E402  (after load_dotenv so it sees AI_* settings)
+import ai      # noqa: E402  (after load_dotenv so they see their settings)
+import notify  # noqa: E402
 
 API_KEY = os.environ.get("API_KEY", "")
 DB_PATH = os.environ.get("DB_PATH", str(BASE_DIR / "readings.db"))
@@ -41,7 +42,7 @@ MAX_QUESTION_LEN = 300
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# AI calls take a few seconds - run them in the background so the ESP32 never waits.
+# AI calls and emails take a few seconds - run them in the background so the ESP32 never waits.
 ai_jobs = ThreadPoolExecutor(max_workers=2)
 
 
@@ -99,6 +100,7 @@ def init_db():
                )"""
         )
     ai.init_usage_table(DB_PATH)
+    notify.init_table(DB_PATH)
 
 
 # ---------- Alarms ----------
@@ -141,22 +143,30 @@ def limits_text():
             f"rising >= {ALARMS.rise_c_per_min} °C/min")
 
 
-def explain_alarm_in_background(alarm_id, device, kind, message, now):
-    """Ask the AI to explain an alarm and save the answer next to it."""
-    try:
-        since = (now - timedelta(minutes=30)).isoformat(timespec="seconds")
-        with sqlite3.connect(DB_PATH) as db:
-            rows = db.execute(
-                "SELECT created, temp_c FROM readings WHERE device = ? AND created >= ? "
-                "ORDER BY id DESC LIMIT 120",
-                (device, since),
-            ).fetchall()
-        text = ai.explain_alarm(DB_PATH, kind, message, list(reversed(rows)), limits_text())
+def handle_new_alarms(new_alarms, device, temp_c, now):
+    """Background job: AI explains each alarm, then ONE email is sent for all of them."""
+    since = (now - timedelta(minutes=30)).isoformat(timespec="seconds")
+    with sqlite3.connect(DB_PATH) as db:
+        rows = db.execute(
+            "SELECT created, temp_c FROM readings WHERE device = ? AND created >= ? "
+            "ORDER BY id DESC LIMIT 120",
+            (device, since),
+        ).fetchall()
+    recent = list(reversed(rows))
+
+    for alarm in new_alarms:
+        try:
+            text = ai.explain_alarm(DB_PATH, alarm["kind"], alarm["message"], recent, limits_text())
+        except Exception:
+            app.logger.exception("AI alarm explanation failed")
+            text = None
+        alarm["ai_message"] = text
         if text:
             with sqlite3.connect(DB_PATH) as db:
-                db.execute("UPDATE alarms SET ai_message = ? WHERE id = ?", (text, alarm_id))
-    except Exception:
-        app.logger.exception("AI alarm explanation failed")
+                db.execute("UPDATE alarms SET ai_message = ? WHERE id = ?", (text, alarm["id"]))
+
+    # Email goes out even if the AI failed - then it just has the plain alarm text.
+    notify.send_alarm_email(DB_PATH, new_alarms, temp_c, now.astimezone(ai.LOCAL_TZ))
 
 
 # ---------- Data for the AI (summaries and questions) ----------
@@ -246,8 +256,9 @@ def add_reading():
     )
     db.commit()
 
-    for alarm in new_alarms:
-        ai_jobs.submit(explain_alarm_in_background, alarm["id"], device, alarm["kind"], alarm["message"], now)
+    if new_alarms:
+        # Copies, so the background job can add AI text without changing this response.
+        ai_jobs.submit(handle_new_alarms, [dict(a) for a in new_alarms], device, temp, now)
     return jsonify(ok=True, temp_c=temp, created=created, alarms=new_alarms), 201
 
 

@@ -45,6 +45,33 @@ resource "aws_ssm_parameter" "api_key" {
   value = var.api_key
 }
 
+# ---------- Email alerts (SNS) ----------
+
+# The app publishes alarm messages to this topic; SNS emails them to every subscriber.
+resource "aws_sns_topic" "alarms" {
+  name = "apl-temp-alarms"
+}
+
+# AWS sends a confirmation email first - the subscription is active after you click the link.
+resource "aws_sns_topic_subscription" "email" {
+  topic_arn = aws_sns_topic.alarms.arn
+  protocol  = "email"
+  endpoint  = var.alert_email
+}
+
+# Settings the server reads at setup time (not secret, so plain String parameters).
+resource "aws_ssm_parameter" "alert_topic_arn" {
+  name  = "/apl-temp/alert_topic_arn"
+  type  = "String"
+  value = aws_sns_topic.alarms.arn
+}
+
+resource "aws_ssm_parameter" "public_url" {
+  name  = "/apl-temp/public_url"
+  type  = "String"
+  value = "http://${aws_eip.web.public_ip}"
+}
+
 # ---------- Permissions for the server (IAM role) ----------
 
 # The server gets permissions through a role instead of stored access keys.
@@ -60,16 +87,34 @@ resource "aws_iam_role" "server" {
   })
 }
 
-# Only what it needs: read its own API key. (SNS is added in step 6.)
+# Only what it needs: read its own settings from Parameter Store...
 resource "aws_iam_role_policy" "read_api_key" {
-  name = "read-api-key"
+  name = "read-app-settings"
+  role = aws_iam_role.server.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = "ssm:GetParameter"
+      Resource = [
+        aws_ssm_parameter.api_key.arn,
+        aws_ssm_parameter.alert_topic_arn.arn,
+        aws_ssm_parameter.public_url.arn,
+      ]
+    }]
+  })
+}
+
+# ...and send alarm emails, only to its own topic.
+resource "aws_iam_role_policy" "send_alarms" {
+  name = "send-alarm-emails"
   role = aws_iam_role.server.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = "ssm:GetParameter"
-      Resource = aws_ssm_parameter.api_key.arn
+      Action   = "sns:Publish"
+      Resource = aws_sns_topic.alarms.arn
     }]
   })
 }

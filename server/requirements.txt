@@ -4,3 +4,4 @@ pytest==8.*
 gunicorn==23.*
 # Claude SDK 1.x: Bedrock InvokeModel with Haiku 4.5 (2.x needs Claude 4.7+ on Bedrock, see ai.py)
 anthropic[bedrock]>=1.17,<2
+boto3>=1.35   # AWS SNS for alarm emails

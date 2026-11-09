@@ -57,6 +57,15 @@
       changed_when: false
       no_log: true
 
+    - name: Read email alert settings from Parameter Store (empty if not created yet)
+      ansible.builtin.command: >
+        aws ssm get-parameter --name /apl-temp/{{ item }}
+        --region {{ aws_region }} --query Parameter.Value --output text
+      loop: [alert_topic_arn, public_url]
+      register: settings
+      changed_when: false
+      failed_when: false
+
     - name: Write the app settings (only root can read this file)
       ansible.builtin.copy:
         dest: /etc/apl-temp.env
@@ -67,6 +76,8 @@
           AI_BACKEND=bedrock
           AWS_REGION={{ aws_region }}
           AI_DAILY_LIMIT=50
+          ALERT_TOPIC_ARN={{ settings.results[0].stdout if settings.results[0].rc == 0 else '' }}
+          PUBLIC_URL={{ settings.results[1].stdout if settings.results[1].rc == 0 else '' }}
       no_log: true
       notify: restart app
 

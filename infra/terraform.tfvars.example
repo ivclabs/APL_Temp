@@ -1,3 +1,4 @@
 # Copy to terraform.tfvars and fill in. terraform.tfvars is never pushed to GitHub.
 my_ip_cidr = "1.2.3.4/32"         # your home IP: curl https://checkip.amazonaws.com
 api_key    = "same-key-as-the-esp32"
+alert_email = "you@example.com"    # gets alarm emails; click the confirmation link once

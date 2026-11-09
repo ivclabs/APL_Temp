@@ -24,6 +24,11 @@ variable "api_key" {
   description = "Secret key the ESP32 sends in the X-API-Key header."
 }
 
+variable "alert_email" {
+  type        = string
+  description = "Email address that receives alarm emails (SNS sends a confirmation link first)."
+}
+
 variable "repo_url" {
   type    = string
   default = "https://github.com/ivclabs/APL_Temp.git"
