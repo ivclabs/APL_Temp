@@ -277,7 +277,7 @@ def list_readings():
 def list_alarms():
     limit = min(request.args.get("limit", 50, type=int), 1000)
     rows = get_db().execute(
-        "SELECT device, kind, temp_c, message, ai_message, created FROM alarms ORDER BY id DESC LIMIT ?",
+        "SELECT id, device, kind, temp_c, message, ai_message, created FROM alarms ORDER BY id DESC LIMIT ?",
         (limit,),
     ).fetchall()
     return jsonify([dict(r) for r in rows])
@@ -396,6 +396,12 @@ PAGE = """<!doctype html>
     .late .dot { background: #f29900; }
     .alarm { background: #fdecea; border-left: 4px solid #d93025; padding: .5rem .75rem; margin: .4rem 0; }
     .alarm small { color: #777; display: block; }
+    /* Older alarms: one short line each, tap to see the full text */
+    #older-alarms > summary { cursor: pointer; color: #1a73e8; padding: .5rem 0; font-weight: 600; }
+    .alarm-row { background: #fdecea; border-left: 4px solid #d93025; margin: .3rem 0; padding: .45rem .75rem; }
+    .alarm-row summary { cursor: pointer; }
+    .alarm-row .when { color: #777; }
+    .alarm-row[open] summary { margin-bottom: .3rem; }
     .ai { margin-top: .35rem; }
     .ai-box { background: #eef3fd; border-left: 4px solid #1a73e8; padding: .6rem .8rem; }
     #ask-form { display: flex; gap: .5rem; }
@@ -428,6 +434,10 @@ PAGE = """<!doctype html>
 
   <h2>Alarms</h2>
   <div id="alarms"><p class="muted">Loading…</p></div>
+  <details id="older-alarms" hidden>
+    <summary id="older-label">Show older alarms</summary>
+    <div id="older-list"></div>
+  </details>
 
   <h2>🤖 Ask the AI</h2>
   <form id="ask-form">
@@ -484,36 +494,81 @@ function showReadings(rows) {
   newestSeen = rows[0].created;
 }
 
+// Alarms: the latest one in full, older ones folded into a list of short lines.
+const ALARMS_SHOWN = 100;
+const openAlarms = new Set();   // ids of older alarms the visitor opened - kept open across refreshes
+let alarmsKey = null;
+
+function aiWriting(a) {
+  return !a.ai_message && Date.now() - new Date(a.created).getTime() < 120000;
+}
+
+// Rule message + AI explanation (or "AI is writing…") for one alarm.
+function alarmDetails(a, el) {
+  el.append(a.message);
+  if (a.ai_message || aiWriting(a)) {
+    const explain = document.createElement("div");
+    explain.className = a.ai_message ? "ai" : "ai muted";
+    explain.textContent = a.ai_message ? "🤖 " + a.ai_message : "🤖 AI is writing an explanation…";
+    el.append(explain);
+  }
+}
+
 function showAlarms(alarms) {
+  // Only redraw when something changed, so the page doesn't jump while you read.
+  const key = JSON.stringify(alarms.map(a => [a.id, a.ai_message, aiWriting(a)]));
+  if (key === alarmsKey) return;
+  alarmsKey = key;
+
   const box = document.getElementById("alarms");
+  const older = document.getElementById("older-alarms");
   box.replaceChildren();
   if (alarms.length === 0) {
     const p = document.createElement("p");
     p.className = "muted";
     p.textContent = "No alarms. All good.";
     box.append(p);
+    older.hidden = true;
     return;
   }
-  for (const a of alarms) {
-    const div = document.createElement("div");
-    div.className = "alarm";
-    const b = document.createElement("b");
-    b.textContent = a.kind.toUpperCase();
-    const small = document.createElement("small");
-    small.textContent = localTime(a.created);
-    div.append(b, " – " + a.message);
-    const explain = document.createElement("div");
-    explain.className = "ai";
-    if (a.ai_message) {
-      explain.textContent = "🤖 " + a.ai_message;
-      div.append(explain);
-    } else if (Date.now() - new Date(a.created).getTime() < 120000) {
-      explain.className = "ai muted";
-      explain.textContent = "🤖 AI is writing an explanation…";
-      div.append(explain);
-    }
-    div.append(small);
-    box.append(div);
+
+  // Latest alarm: full card
+  const a = alarms[0];
+  const div = document.createElement("div");
+  div.className = "alarm";
+  const b = document.createElement("b");
+  b.textContent = a.kind.toUpperCase();
+  div.append(b, " – ");
+  alarmDetails(a, div);
+  const small = document.createElement("small");
+  small.textContent = "Latest alarm · " + localTime(a.created);
+  div.append(small);
+  box.append(div);
+
+  // Older alarms: one line each (type · temperature · time), tap a line to open it
+  const rest = alarms.slice(1);
+  older.hidden = rest.length === 0;
+  const more = alarms.length === ALARMS_SHOWN ? " (latest " + ALARMS_SHOWN + ")" : "";
+  document.getElementById("older-label").textContent =
+    "Show " + rest.length + " older alarm" + (rest.length === 1 ? "" : "s") + more;
+  const list = document.getElementById("older-list");
+  list.replaceChildren();
+  for (const o of rest) {
+    const row = document.createElement("details");
+    row.className = "alarm-row";
+    row.open = openAlarms.has(o.id);
+    row.addEventListener("toggle", () => row.open ? openAlarms.add(o.id) : openAlarms.delete(o.id));
+    const sum = document.createElement("summary");
+    const kind = document.createElement("b");
+    kind.textContent = o.kind.toUpperCase();
+    const when = document.createElement("span");
+    when.className = "when";
+    when.textContent = " · " + localTime(o.created);
+    sum.append(kind, " · " + o.temp_c.toFixed(1) + " °C", when);
+    const body = document.createElement("div");
+    alarmDetails(o, body);
+    row.append(sum, body);
+    list.append(row);
   }
 }
 
@@ -550,7 +605,7 @@ async function update() {
   try {
     const [readings, alarms] = await Promise.all([
       fetch("/api/readings?limit=30").then(r => r.json()),
-      fetch("/api/alarms?limit=10").then(r => r.json()),
+      fetch("/api/alarms?limit=" + ALARMS_SHOWN).then(r => r.json()),
     ]);
     showReadings(readings);
     showAlarms(alarms);
