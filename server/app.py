@@ -402,6 +402,10 @@ PAGE = """<!doctype html>
     .alarm-row summary { cursor: pointer; }
     .alarm-row .when { color: #777; }
     .alarm-row[open] summary { margin-bottom: .3rem; }
+    /* Readings table: first 5 rows, the rest behind "Show more" */
+    #rows.folded tr:nth-child(n+6) { display: none; }
+    .more { background: none; border: 0; color: #1a73e8; font: inherit; font-weight: 600;
+            cursor: pointer; padding: .5rem 0; }
     .ai { margin-top: .35rem; }
     .ai-box { background: #eef3fd; border-left: 4px solid #1a73e8; padding: .6rem .8rem; }
     #ask-form { display: flex; gap: .5rem; }
@@ -450,11 +454,12 @@ PAGE = """<!doctype html>
   <h2>Latest readings</h2>
   <table>
     <thead><tr><th>Time</th><th>Device</th><th>°C</th></tr></thead>
-    <tbody id="rows"></tbody>
+    <tbody id="rows" class="folded"></tbody>
   </table>
+  <button id="more-rows" class="more" type="button" hidden aria-controls="rows"></button>
 
 <script>
-// Asks the server for new data every 3 seconds and updates the page without reloading it.
+// Asks the server for new data every 2 seconds and updates the page without reloading it.
 const CHECK_EVERY_MS = 2000;                    // how often we ask the server
 const READING_EVERY_S = {{ reading_every_s }};  // ESP32 sends at least this often (sooner if temp changes)
 let newestSeen = null;
@@ -492,7 +497,25 @@ function showReadings(rows) {
     body.append(tr);
   }
   newestSeen = rows[0].created;
+  updateMoreButton();
 }
+
+// "Show more" for the readings table. The table is redrawn every 2 s, but the
+// folded/unfolded state lives on the <tbody>, so the visitor's choice is kept.
+const ROWS_FOLDED = 5;
+function updateMoreButton() {
+  const body = document.getElementById("rows");
+  const btn = document.getElementById("more-rows");
+  const extra = body.rows.length - ROWS_FOLDED;
+  btn.hidden = extra <= 0;
+  const folded = body.classList.contains("folded");
+  btn.textContent = folded ? "▸ Show " + extra + " more readings" : "▾ Show fewer";
+  btn.setAttribute("aria-expanded", String(!folded));
+}
+document.getElementById("more-rows").addEventListener("click", () => {
+  document.getElementById("rows").classList.toggle("folded");
+  updateMoreButton();
+});
 
 // Alarms: the latest one in full, older ones folded into a list of short lines.
 const ALARMS_SHOWN = 100;
