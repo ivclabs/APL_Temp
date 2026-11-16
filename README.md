@@ -26,7 +26,7 @@ https://github.com/user-attachments/assets/3a964745-2a04-45ab-9ac4-16658c5eb5fa
 - [x] GenAI with Claude Haiku 4.5 on AWS Bedrock: explains alarms, writes a daily summary, answers questions
 - [x] Email alerts with the AI explanation (AWS SNS)
 - [x] Dashboard chart (1 h / 6 h / 24 h, limit lines, alarm markers)
-- [x] Documentation: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) · video script: [docs/VIDEO_SCRIPT.md](docs/VIDEO_SCRIPT.md)
+- [x] Documentation: [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md)
 
 ## Hardware
 - Olimex ESP32-C3-DevKit-Lipo
