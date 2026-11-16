@@ -101,7 +101,7 @@ flowchart LR
 | Sensor red (VDD) | + rail |
 | Sensor black (GND) | − rail |
 
-Column 20 is one connected row inside the breadboard, so A20, C20 and E20 are the same data wire. The probe colors are red = VDD, black = GND, white = DATA. The jumper wires that extend the probe are not those colors. The firmware reads GPIO7 (`SENSOR_PIN` in `temp-sensor/src/main.cpp`).
+The five holes in column 20 are connected inside the breadboard, so A20, C20 and E20 are the same data wire. The probe colors are red = VDD, black = GND, white = DATA. The jumper wires that extend the probe are not those colors. The firmware reads GPIO7 (`SENSOR_PIN` in `temp-sensor/src/main.cpp`).
 
 Short video of the built hardware:
 
