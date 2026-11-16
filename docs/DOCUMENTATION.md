@@ -69,7 +69,39 @@ flowchart LR
 | **DS18B20 waterproof probe** | A digital sensor, so there is no analog noise. It is accurate to ±0.5 °C, works from −55 to +125 °C, and is sealed in a steel tip, so it can go inside a freezer (−18 °C is well inside its range). Only the thin cable goes through the door seal; the ESP32 stays outside, where WiFi works. |
 | **4.7 kΩ resistor** | The DS18B20 uses the 1-Wire bus, which needs a pull-up resistor between DATA and 3.3 V. |
 
-Wiring: probe DATA → GPIO7, VCC → 3.3 V, GND → GND, and 4.7 kΩ between DATA and 3.3 V.
+### Connection diagram
+
+Front of the board, with the USB-C connector at the bottom:
+
+- **EXT1 (left):** +5V, GND, IO0, IO1, IO2, IO3, IO4, IO5, IO6
+- **EXT2 (right):** +3V3, GND, EN, IO21, IO20, IO10, IO9, IO8, IO7
+
+IO2, IO8 and IO9 are boot pins, and IO20 and IO21 are the UART. I did not use them. The probe uses 3.3 V, never +5V.
+
+The board sits across the middle gap of the breadboard. EXT2 is in holes **B3–B11** and EXT1 is in **J3–J11**. On EXT2, GPIO7 is hole B3, GND is B10, and +3V3 is B11. The free holes in row A, next to EXT2, carry the wires.
+
+```mermaid
+flowchart LR
+    P3["+3V3, hole B11"] --> PLUS["red + rail"]
+    PG["GND, hole B10"] --> MINUS["blue − rail"]
+    IO7["GPIO7, hole B3"] --> COL["column 20<br/>A20, C20, E20"]
+    PLUS --> R["4.7 kΩ"] --> COL
+    COL --> DATA["probe white, DATA"]
+    PLUS --> VDD["probe red, VDD"]
+    MINUS --> GNDW["probe black, GND"]
+```
+
+| From | To |
+|---|---|
+| A11 (+3V3) | red + rail |
+| A10 (GND) | blue − rail |
+| A3 (GPIO7) | A20 (data column) |
+| 4.7 kΩ resistor | + rail → C20 |
+| Sensor white (DATA) | E20 |
+| Sensor red (VDD) | + rail |
+| Sensor black (GND) | − rail |
+
+Column 20 is one connected row inside the breadboard, so A20, C20 and E20 are the same data wire. The probe colors are red = VDD, black = GND, white = DATA. The jumper wires that extend the probe are not those colors. The firmware reads GPIO7 (`SENSOR_PIN` in `temp-sensor/src/main.cpp`).
 
 Short video of the built hardware:
 
