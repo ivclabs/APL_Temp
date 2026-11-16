@@ -71,6 +71,8 @@ flowchart LR
 
 Wiring: probe DATA → GPIO7, VCC → 3.3 V, GND → GND, and 4.7 kΩ between DATA and 3.3 V.
 
+Short video of the built hardware: [hardware.mp4](hardware.mp4).
+
 ### 2.3 Software choices
 
 | Part | Choice | Why |
