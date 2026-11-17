@@ -15,7 +15,12 @@ ESP32 + DS18B20 ──HTTP──> nginx ──> Flask app (gunicorn) ──> SQL
 
 ## Videos
 
-**Project presentation (6 min):** [docs/project-video.mp4](docs/project-video.mp4)
+**Project presentation (6 min):** 
+
+
+https://github.com/user-attachments/assets/541b793a-027b-4036-884a-93fa2592a1b1
+
+
 
 **Hardware:**
 
