@@ -82,26 +82,26 @@ The board sits across the middle gap of the breadboard. EXT2 is in holes **B3–
 
 ```mermaid
 flowchart LR
-    P3["+3V3, hole B11"] --> PLUS["red + rail"]
-    PG["GND, hole B10"] --> MINUS["blue − rail"]
-    IO7["GPIO7, hole B3"] --> COL["column 20<br/>A20, C20, E20"]
-    PLUS --> R["4.7 kΩ"] --> COL
-    COL --> DATA["probe white, DATA"]
-    PLUS --> VDD["probe red, VDD"]
-    MINUS --> GNDW["probe black, GND"]
+    P3["A11, +3V3"] -->|red jumper| PLUS["red + rail"]
+    PG["A10, GND"] -->|blue jumper| MINUS["blue − rail"]
+    IO7["A3, GPIO7"] -->|yellow jumper| COL["column 20<br/>A20, C20, E20"]
+    PLUS -->|4.7 kΩ| COL
+    W["probe white, DATA"] --> COL
+    R["probe red, VDD"] --> PLUS
+    B["probe black, GND"] --> MINUS
 ```
 
-| From | To |
-|---|---|
-| A11 (+3V3) | red + rail |
-| A10 (GND) | blue − rail |
-| A3 (GPIO7) | A20 (data column) |
-| 4.7 kΩ resistor | + rail → C20 |
-| Sensor white (DATA) | E20 |
-| Sensor red (VDD) | + rail |
-| Sensor black (GND) | − rail |
+| Wire | From | To |
+|---|---|---|
+| Yellow jumper | A3 (GPIO7) | A20 |
+| Blue jumper | A10 (GND) | blue − rail |
+| Red jumper | A11 (+3V3) | red + rail |
+| 4.7 kΩ resistor | C20 | red + rail |
+| Probe white (DATA) | sensor | E20 |
+| Probe black (GND) | sensor | blue − rail |
+| Probe red (VDD) | sensor | red + rail |
 
-The five holes in column 20 are connected inside the breadboard, so A20, C20 and E20 are the same data wire. The probe colors are red = VDD, black = GND, white = DATA. The jumper wires that extend the probe are not those colors. The firmware reads GPIO7 (`SENSOR_PIN` in `temp-sensor/src/main.cpp`).
+The five holes in column 20 are connected inside the breadboard, so A20, C20 and E20 are the same data wire. The firmware reads GPIO7 (`SENSOR_PIN` in `temp-sensor/src/main.cpp`).
 
 Short video of the built hardware:
 
