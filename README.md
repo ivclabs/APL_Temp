@@ -13,7 +13,11 @@ ESP32 + DS18B20 ──HTTP──> nginx ──> Flask app (gunicorn) ──> SQL
                                                                               └──> Email alerts (SNS)
 ```
 
-## Hardware video
+## Videos
+
+**Project presentation (6 min):** [docs/project-video.mp4](docs/project-video.mp4)
+
+**Hardware:**
 
 https://github.com/user-attachments/assets/3a964745-2a04-45ab-9ac4-16658c5eb5fa
 
